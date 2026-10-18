@@ -67,15 +67,31 @@ function parseSearch(query: Record<string, string | string[]>): SearchParams | n
 	};
 }
 
-/** A stored key and the other derivative next to it (`<kind>/<id>/{list,detail}.webp`). */
+// Keys come from the Member's own request (upload keys are not bound to the uploader), so only
+// ever delete what storePhoto produces for a Recipe photo; never a Member icon or any other path.
+const RECIPE_PHOTO_KEY =
+	/^(recipe\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/)(list|detail)\.webp$/;
+
+/** A deletable stored key and the other derivative next to it; nothing for any other key. */
 const withSibling = (key: string) => {
-	const m = /^(.*\/)(list|detail)\.webp$/.exec(key);
-	return m ? [key, `${m[1]}${m[2] === 'list' ? 'detail' : 'list'}.webp`] : [key];
+	const m = RECIPE_PHOTO_KEY.exec(key);
+	return m ? [`${m[1]}list.webp`, `${m[1]}detail.webp`] : [];
 };
 
-/** Photos no Recipe references any more; a storage failure must not fail the committed request. */
-const deletePhotos = (store: ImageStore, keys: string[]) =>
-	Promise.allSettled(keys.flatMap(withSibling).map((k) => store.delete(k)));
+/**
+ * Photos no Recipe references any more. Runs after commit, so nothing here may fail the request:
+ * building the store (missing R2_* env) and every delete are inside the guard.
+ */
+async function deletePhotos(store: () => ImageStore, keys: string[]) {
+	const doomed = [...new Set(keys.flatMap(withSibling))];
+	if (doomed.length === 0) return;
+	try {
+		const s = store();
+		await Promise.allSettled(doomed.map((k) => s.delete(k)));
+	} catch (e) {
+		console.error('photo cleanup failed', e);
+	}
+}
 
 export const recipesRoute = ({ store }: { store: () => ImageStore }) =>
 	new Hono<ApiEnv>()
@@ -112,13 +128,13 @@ export const recipesRoute = ({ store }: { store: () => ImageStore }) =>
 				const result = await updateRecipe(db, actorOf(c), c.req.param('id'), c.req.valid('json'));
 				if (!result.ok) return c.json({ error: result.error }, statusOf(result.error));
 				const { removedPhotoKeys, ...rest } = result.value;
-				await deletePhotos(store(), removedPhotoKeys);
+				await deletePhotos(store, removedPhotoKeys);
 				return c.json(rest);
 			}
 		)
 		.delete('/:id', requireMember, async (c) => {
 			const result = await deleteRecipe(db, actorOf(c), c.req.param('id'));
 			if (!result.ok) return c.json({ error: result.error }, statusOf(result.error));
-			await deletePhotos(store(), result.value.photoKeys);
+			await deletePhotos(store, result.value.photoKeys);
 			return c.body(null, 204);
 		});

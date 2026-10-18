@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { createApp } from './app';
 import { call, seedMember, store, type TestMember } from './test-helpers';
 
 let alice: TestMember;
@@ -10,10 +11,13 @@ let gin: string;
 let tonic: string;
 const tag = randomUUID().slice(0, 8);
 
+const photoKey = (kind = 'recipe', file = 'detail') => `${kind}/${randomUUID()}/${file}.webp`;
+const put = (key: string) => store.put(key, new Uint8Array([1]), 'image/webp');
+
 const recipeBody = (title: string, extra: object = {}) => ({
 	title,
 	description: '',
-	mainPhotoKey: `recipe/${title}/detail.webp`,
+	mainPhotoKey: photoKey(),
 	ingredients: [
 		{ ingredientId: gin, mixRatio: 3 },
 		{ ingredientId: tonic, mixRatio: 5 }
@@ -88,11 +92,13 @@ describe('GET /api/recipes/:id', () => {
 
 describe('PUT /api/recipes/:id', () => {
 	it('401 / 403 / 404 / 200 and removes dropped photos from storage (FR-008)', async () => {
-		const id = await createRecipe(alice, `編集${tag}`);
-		await store.put(`recipe/編集${tag}/detail.webp`, new Uint8Array([1]), 'image/webp');
-		await store.put(`recipe/編集${tag}/list.webp`, new Uint8Array([1]), 'image/webp');
+		const first = recipeBody(`編集${tag}`);
+		const id = await createRecipe(alice, `編集${tag}`, { mainPhotoKey: first.mainPhotoKey });
+		const sibling = first.mainPhotoKey.replace('detail', 'list');
+		await put(first.mainPhotoKey);
+		await put(sibling);
 		const next = recipeBody(`編集後${tag}`);
-		await store.put(next.mainPhotoKey, new Uint8Array([1]), 'image/webp');
+		await put(next.mainPhotoKey);
 
 		expect((await call(null, 'PUT', `/recipes/${id}`, next)).status).toBe(401);
 		expect((await call(bob, 'PUT', `/recipes/${id}`, next)).status).toBe(403);
@@ -101,8 +107,35 @@ describe('PUT /api/recipes/:id', () => {
 		const res = await call(alice, 'PUT', `/recipes/${id}`, next);
 		expect(res.status).toBe(200);
 		expect(await res.json()).toEqual({ id, overrideDiscarded: false });
-		expect([...store.objects.keys()]).toEqual([next.mainPhotoKey]);
+		expect(store.objects.has(first.mainPhotoKey)).toBe(false);
+		expect(store.objects.has(sibling)).toBe(false);
+		expect(store.objects.has(next.mainPhotoKey)).toBe(true);
 		expect((await (await call(null, 'GET', `/recipes/${id}`)).json()).title).toBe(`編集後${tag}`);
+	});
+
+	it('never deletes keys that are not Recipe photos, e.g. another Member icon', async () => {
+		const icon = photoKey('member', 'list');
+		const odd = 'recipe/not-a-uuid/detail.webp';
+		await put(icon);
+		await put(odd);
+		const id = await createRecipe(alice, `細工${tag}`, { extraPhotoKeys: [icon, odd] });
+		const res = await call(alice, 'PUT', `/recipes/${id}`, recipeBody(`細工後${tag}`));
+		expect(res.status).toBe(200);
+		expect(store.objects.has(icon)).toBe(true);
+		expect(store.objects.has(odd)).toBe(true);
+	});
+
+	it('does not fail a committed write when storage cannot be reached', async () => {
+		const broken = createApp({
+			store: () => {
+				throw new Error('R2_BUCKET is not set');
+			}
+		});
+		const first = photoKey();
+		const id = await createRecipe(alice, `障害${tag}`, { mainPhotoKey: first });
+		const res = await call(alice, 'PUT', `/recipes/${id}`, recipeBody(`障害後${tag}`), broken);
+		expect(res.status).toBe(200);
+		expect((await call(alice, 'DELETE', `/recipes/${id}`, undefined, broken)).status).toBe(204);
 	});
 });
 

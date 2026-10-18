@@ -5,7 +5,7 @@ import { memoryImageStore } from '#lib/server/services/images/index.js';
 import { createApp } from './app';
 
 export const store = memoryImageStore();
-const app = createApp({ store: () => store });
+const defaultApp = createApp({ store: () => store });
 
 export type TestMember = NonNullable<App.Locals['member']>;
 
@@ -25,7 +25,8 @@ export function call(
 	as: TestMember | null,
 	method: string,
 	path: string,
-	body?: unknown
+	body?: unknown,
+	app: ReturnType<typeof createApp> = defaultApp
 ): Promise<Response> {
 	return Promise.resolve(
 		app.request(

@@ -56,6 +56,23 @@ The first migration enables `pg_trgm` by a line added by hand to `drizzle/0000_i
 
 The DB client (`#lib/server/db`) uses node-postgres. Locally it talks to the compose Postgres; in production set `DATABASE_URL` to Neon's pooled connection string (`-pooler` host, `sslmode=require`).
 
+## API
+
+Routes live in `src/lib/server/api/` and only validate the request shape, call a service and map its result to a status; `AppType` (from `createApp()` in `app.ts`) types `createApiClient` in `src/lib/api.ts`. Errors are `{ "error": "<code>" }`: 400 malformed request, 401 signed out or Suspended, 403 no Username / not the owner / not an Administrator, 404, 409 duplicate Ingredient (with `similar`), 422 a rule of the service rejected the input (the code is the service's, e.g. `main_photo_required`).
+
+| Route                            | Who           | Notes                                                                                                                                                                               |
+| -------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/recipes`               | anyone        | Search (FR-041..045), keyset: `ingredientIds`/`baseIds` (comma-separated), `onlyThese`, `keyword`, `abvMin`, `abvMax`, `nonAlcoholic` (`true`), `sort=new\|like`, `limit`, `cursor` |
+| `GET /api/recipes/:id`           | anyone        | Detail (FR-046)                                                                                                                                                                     |
+| `POST /api/recipes`              | Member        | Publish, 201 `{ id }` (FR-001..007)                                                                                                                                                 |
+| `PUT /api/recipes/:id`           | owner         | Replace the whole Recipe (FR-008); photos no longer referenced are deleted from storage                                                                                             |
+| `DELETE /api/recipes/:id`        | owner, admin  | 204; unreferenced photos are deleted from storage                                                                                                                                   |
+| `GET /api/ingredients/suggest`   | anyone        | `?name=&limit=` similar existing Ingredients (FR-014)                                                                                                                               |
+| `POST /api/ingredients`          | Member        | `{ name, abvPercent, isBaseSpirit? }`; 0% for a Member (FR-012), above 0% only for an Administrator (FR-013)                                                                        |
+| `PATCH /api/ingredients/:id/abv` | Administrator | `{ abvPercent }`, recomputes the Recipes using it (FR-015)                                                                                                                          |
+
+Photo deletion on Recipe edit/delete removes the stored key and its `list`/`detail` sibling, best effort after commit (a storage failure does not fail the request).
+
 ## Auth
 
 Better Auth runs inside the app (ADR 0005); its endpoints are under `/api/auth/*`. Google and LINE only, no email/password. Set the `BETTER_AUTH_*`, `GOOGLE_*` and `LINE_*` variables from `.env.example`.
@@ -94,7 +111,7 @@ The `production` GitHub environment needs the secrets `DATABASE_URL`, `VERCEL_TO
 
 ## Photos (ADR 0003)
 
-`PhotoPicker.svelte` shrinks a selected photo (JPEG/PNG/WebP, up to 10MB) below 4.5MB in the browser; `POST /api/photos?kind=recipe|member` takes the raw bytes as `application/octet-stream`, and `storePhoto` re-encodes them with `sharp` into two metadata-free WebP files (`<kind>/<id>/list.webp` 480px, `detail.webp` 1600px) in R2. The original is never stored. The route denies everything (401) until auth passes an `authorize` middleware to `photosRoute()` in `app.ts`. R2 is configured by the `R2_*` variables (declared in `src/env.ts`, examples in `.env.example`), read on the first upload. Derivatives are served with `Cache-Control: public, max-age=3600`, so a deleted Photo can still be fetched from an edge or browser cache for up to about an hour. `/dev/photo-picker` is the e2e harness page (uploads nothing); it returns 404 unless `E2E_HARNESS=1`, which only `playwright.config.ts` sets. Set `PW_REUSE_SERVER=1` to let `pnpm test:e2e` reuse an already running preview server on port 4173 (off by default, since another worktree may own that port).
+`PhotoPicker.svelte` shrinks a selected photo (JPEG/PNG/WebP, up to 10MB) below 4.5MB in the browser; `POST /api/photos?kind=recipe|member` takes the raw bytes as `application/octet-stream`, and `storePhoto` re-encodes them with `sharp` into two metadata-free WebP files (`<kind>/<id>/list.webp` 480px, `detail.webp` 1600px) in R2. The original is never stored. The route is behind `requireMember` (401 signed out, 403 without a Username). R2 is configured by the `R2_*` variables (declared in `src/env.ts`, examples in `.env.example`), read on the first upload. Derivatives are served with `Cache-Control: public, max-age=3600`, so a deleted Photo can still be fetched from an edge or browser cache for up to about an hour. `/dev/photo-picker` is the e2e harness page (uploads nothing); it returns 404 unless `E2E_HARNESS=1`, which only `playwright.config.ts` sets. Set `PW_REUSE_SERVER=1` to let `pnpm test:e2e` reuse an already running preview server on port 4173 (off by default, since another worktree may own that port).
 
 ### Known limits
 
