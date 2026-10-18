@@ -120,6 +120,13 @@ Work on a branch off `develop` and open a PR into `develop`; link the issue with
 
 The `production` GitHub environment needs the secrets `DATABASE_URL`, `VERCEL_TOKEN`, `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`. App runtime variables (`BETTER_AUTH_*`, `GOOGLE_*`, `LINE_*`, `R2_*`) are set in the Vercel project.
 
+### 日本語で書くもの
+
+Issue、PR、レビュー、コメント、コミットメッセージは日本語で書きます。コードの識別子、パス、`Closes #N`、FR-/NFR-/ADR の番号、用語集の語(Recipe、Member など)は英語のままにします。
+
+- PR には対応する Issue を `Closes #N` で書きます。
+- レビューは先頭行に `APPROVE` または `REQUEST CHANGES` を書き、続けて日本語で理由を書きます(例: `REQUEST CHANGES: 修正が必要です`)。
+
 ## Photos (ADR 0003)
 
 `PhotoPicker.svelte` shrinks a selected photo (JPEG/PNG/WebP, up to 10MB) below 4.5MB in the browser; `POST /api/photos?kind=recipe|member` takes the raw bytes as `application/octet-stream`, and `storePhoto` re-encodes them with `sharp` into two metadata-free WebP files (`<kind>/<id>/list.webp` 480px, `detail.webp` 1600px) in R2. The original is never stored. The route is behind `requireMember` (401 signed out, 403 without a Username). R2 is configured by the `R2_*` variables (declared in `src/env.ts`, examples in `.env.example`), read on the first upload. Derivatives are served with `Cache-Control: public, max-age=3600`, so a deleted Photo can still be fetched from an edge or browser cache for up to about an hour. `/dev/photo-picker` is the e2e harness page (uploads nothing); it returns 404 unless `E2E_HARNESS=1`, which only `playwright.config.ts` sets. Set `PW_REUSE_SERVER=1` to let `pnpm test:e2e` reuse an already running preview server on port 4173 (off by default, since another worktree may own that port).
