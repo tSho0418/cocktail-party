@@ -427,6 +427,32 @@ describe('deleteRecipe', () => {
 			expect((await deleteRecipe(tx, admin, b)).ok).toBe(true);
 			expect(await deleteRecipe(tx, admin, b)).toEqual({ ok: false, error: 'not_found' });
 		}));
+
+	it("never returns a photo key another Recipe still uses (borrowed key can't delete a victim's photo)", () =>
+		isolated(async (tx) => {
+			const alice = await seedMember(tx, 'alice');
+			const mallory = await seedMember(tx, 'mallory');
+			const i = await seedIngredients(tx);
+			await make(
+				tx,
+				alice,
+				input('a', [[i.gin, 1]], { mainPhotoKey: 'alice/m', extraPhotoKeys: ['alice/x'] })
+			);
+			const m = await make(
+				tx,
+				mallory,
+				input('m', [[i.gin, 1]], { mainPhotoKey: 'alice/x', extraPhotoKeys: ['alice/m', 'own'] })
+			);
+			const upd = await updateRecipe(
+				tx,
+				mallory,
+				m,
+				input('m', [[i.gin, 1]], { mainPhotoKey: 'own2' })
+			);
+			expect(upd.ok && upd.value.removedPhotoKeys).toEqual(['own']);
+			await updateRecipe(tx, mallory, m, input('m', [[i.gin, 1]], { mainPhotoKey: 'alice/m' }));
+			expect(await deleteRecipe(tx, mallory, m)).toEqual({ ok: true, value: { photoKeys: [] } });
+		}));
 });
 
 describe('getRecipeDetail', () => {

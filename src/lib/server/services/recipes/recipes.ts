@@ -233,6 +233,20 @@ async function photoKeys(tx: Db, recipeId: string, mainPhotoKey: string) {
 }
 
 /**
+ * Keys no Recipe references any more, so deleting the objects cannot break another Recipe
+ * that was given someone else's key. shortcut: keys are not bound to their uploader; an
+ * upload-ownership record would let input validation reject foreign keys outright.
+ */
+async function unreferenced(tx: Db, keys: string[]) {
+	if (keys.length === 0) return [];
+	const used = await tx.execute<{ key: string }>(sql`
+		select ${recipe.mainPhotoKey} as key from ${recipe} where ${inArray(recipe.mainPhotoKey, keys)}
+		union select ${recipePhoto.photoKey} from ${recipePhoto} where ${inArray(recipePhoto.photoKey, keys)}`);
+	const usedKeys = new Set(used.rows.map((r) => r.key));
+	return [...new Set(keys)].filter((k) => !usedKeys.has(k));
+}
+
+/**
  * FR-008: the owner replaces the whole Recipe. The stored override is kept while it stays in
  * range (FR-015/023) unless `resetOverride` (the "recompute" button) or an explicit
  * `abvOverride` (number to set, null to clear) is given. `removedPhotoKeys` are no longer
@@ -266,11 +280,10 @@ export async function updateRecipe(
 		}
 		const before = await photoKeys(tx, recipeId, cur.value.mainPhotoKey);
 		await writeRecipe(tx, recipeId, actor.memberId, v.value, ings.value, derived, override);
-		const kept = new Set([v.value.mainPhotoKey, ...v.value.extraPhotoKeys]);
 		return ok({
 			id: recipeId,
 			overrideDiscarded: derived.overrideDiscarded,
-			removedPhotoKeys: before.filter((k) => !kept.has(k))
+			removedPhotoKeys: await unreferenced(tx, before)
 		});
 	});
 }
@@ -319,7 +332,7 @@ export async function clearAbvOverride(
 
 /**
  * FR-008/074: owner or Administrator. Likes, Saves, steps and photos cascade; Reports stay with
- * target_state 'recipe_deleted'. Returns every photo key so the caller can delete the objects.
+ * target_state 'recipe_deleted'. Returns the now-unreferenced photo keys for the caller to delete.
  */
 export async function deleteRecipe(
 	db: Db,
@@ -335,7 +348,7 @@ export async function deleteRecipe(
 			.set({ targetState: 'recipe_deleted' })
 			.where(eq(report.recipeId, recipeId));
 		await tx.delete(recipe).where(eq(recipe.id, recipeId));
-		return ok({ photoKeys: keys });
+		return ok({ photoKeys: await unreferenced(tx, keys) });
 	});
 }
 
