@@ -30,7 +30,10 @@ export default defineConfig({
 	webServer: {
 		command: 'pnpm build && pnpm preview',
 		port: 4173,
-		env: { E2E_HARNESS: '1' }, // serves /dev/* harness pages; production builds 404 them
+		env: {
+			E2E_HARNESS: '1', // serves /dev/* harness pages; production builds 404 them
+			R2_PUBLIC_BASE_URL: 'https://img.example.invalid' // Photo URLs in rendered pages; never fetched by the specs
+		},
 		// Opt-in only: other worktrees on this machine may already be serving port 4173.
 		reuseExistingServer: !!process.env.PW_REUSE_SERVER
 	}
