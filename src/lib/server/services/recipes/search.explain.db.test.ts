@@ -7,7 +7,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import { afterAll, describe, expect, it } from 'vitest';
 import * as schema from '#lib/server/db/schema.js';
-import { recomputeDerived } from '#lib/server/domain/alcohol/index.js';
+import { recomputeDerived } from '#lib/domain/alcohol/index.js';
 import { searchRecipes, type SearchParams } from './search';
 
 describe.skipIf(!process.env.EXPLAIN_SEARCH)('searchRecipes EXPLAIN on 2,000 Recipes', () => {

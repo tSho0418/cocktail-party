@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, notInArray, sql, type SQL } from 'drizzle-orm';
 import { ingredient, member, recipe, recipeIngredient } from '#lib/server/db/schema.js';
-import type { Result } from '#lib/server/domain/alcohol/index.js';
+import type { Result } from '#lib/domain/alcohol/index.js';
 import { isUuid, likeCountOf, type Db } from './recipes';
 
 export type SearchParams = {
