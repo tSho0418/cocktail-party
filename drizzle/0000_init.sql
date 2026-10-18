@@ -1,6 +1,7 @@
 CREATE EXTENSION IF NOT EXISTS pg_trgm;--> statement-breakpoint
 CREATE TYPE "public"."report_reason" AS ENUM('inappropriate_photo', 'plagiarism', 'spam', 'other');--> statement-breakpoint
 CREATE TYPE "public"."report_status" AS ENUM('open', 'resolved', 'dismissed');--> statement-breakpoint
+CREATE TYPE "public"."report_target_state" AS ENUM('live', 'recipe_deleted', 'member_withdrawn');--> statement-breakpoint
 CREATE TABLE "follow" (
 	"follower_id" uuid NOT NULL,
 	"followee_id" uuid NOT NULL,
@@ -12,7 +13,7 @@ CREATE TABLE "follow" (
 CREATE TABLE "ingredient" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"name" text NOT NULL,
-	"abv_percent" numeric(4, 1) NOT NULL,
+	"abv_percent" numeric NOT NULL,
 	"is_base_spirit" boolean DEFAULT false NOT NULL,
 	"is_alcoholic" boolean GENERATED ALWAYS AS (abv_percent > 0) STORED NOT NULL,
 	"created_by" uuid,
@@ -20,6 +21,7 @@ CREATE TABLE "ingredient" (
 	CONSTRAINT "ingredient_name_unique" UNIQUE("name"),
 	CONSTRAINT "ingredient_name_not_blank" CHECK (char_length(btrim("ingredient"."name")) > 0),
 	CONSTRAINT "ingredient_abv_range" CHECK ("ingredient"."abv_percent" BETWEEN 0 AND 100),
+	CONSTRAINT "ingredient_abv_one_decimal" CHECK ("ingredient"."abv_percent" = round("ingredient"."abv_percent", 1)),
 	CONSTRAINT "ingredient_base_is_alcoholic" CHECK (NOT "ingredient"."is_base_spirit" OR "ingredient"."abv_percent" > 0)
 );
 --> statement-breakpoint
@@ -41,8 +43,8 @@ CREATE TABLE "member" (
 	"suspended_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "member_username_unique" UNIQUE("username"),
 	CONSTRAINT "member_provider_account_unique" UNIQUE("provider","provider_account_id"),
+	CONSTRAINT "member_provider_known" CHECK ("member"."provider" IN ('google', 'line')),
 	CONSTRAINT "member_username_format" CHECK ("member"."username" ~ '^[A-Za-z0-9_]{3,20}$'),
 	CONSTRAINT "member_bio_length" CHECK (char_length("member"."bio") <= 200)
 );
@@ -53,8 +55,8 @@ CREATE TABLE "recipe" (
 	"title" text NOT NULL,
 	"description" text DEFAULT '' NOT NULL,
 	"main_photo_key" text NOT NULL,
-	"auto_abv" numeric(4, 1) DEFAULT 0 NOT NULL,
-	"abv_override" numeric(4, 1),
+	"auto_abv" numeric DEFAULT 0 NOT NULL,
+	"abv_override" numeric,
 	"has_alcohol" boolean DEFAULT false NOT NULL,
 	"search_text" text DEFAULT '' NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -62,6 +64,8 @@ CREATE TABLE "recipe" (
 	CONSTRAINT "recipe_title_length" CHECK (char_length("recipe"."title") BETWEEN 1 AND 50),
 	CONSTRAINT "recipe_description_length" CHECK (char_length("recipe"."description") <= 500),
 	CONSTRAINT "recipe_auto_abv_range" CHECK ("recipe"."auto_abv" BETWEEN 0 AND 100),
+	CONSTRAINT "recipe_auto_abv_one_decimal" CHECK ("recipe"."auto_abv" = round("recipe"."auto_abv", 1)),
+	CONSTRAINT "recipe_abv_override_one_decimal" CHECK ("recipe"."abv_override" = round("recipe"."abv_override", 1)),
 	CONSTRAINT "recipe_non_alcoholic_zero" CHECK ("recipe"."has_alcohol" OR "recipe"."auto_abv" = 0),
 	CONSTRAINT "recipe_abv_override_range" CHECK ("recipe"."abv_override" IS NULL OR ("recipe"."has_alcohol" AND "recipe"."abv_override" > 0 AND "recipe"."abv_override" <= 100))
 );
@@ -69,11 +73,12 @@ CREATE TABLE "recipe" (
 CREATE TABLE "recipe_ingredient" (
 	"recipe_id" uuid NOT NULL,
 	"ingredient_id" uuid NOT NULL,
-	"mix_ratio" numeric(3, 1) NOT NULL,
+	"mix_ratio" numeric NOT NULL,
 	"position" smallint NOT NULL,
 	CONSTRAINT "recipe_ingredient_recipe_id_ingredient_id_pk" PRIMARY KEY("recipe_id","ingredient_id"),
 	CONSTRAINT "recipe_ingredient_position_unique" UNIQUE("recipe_id","position"),
 	CONSTRAINT "recipe_ingredient_mix_ratio_range" CHECK ("recipe_ingredient"."mix_ratio" BETWEEN 0.1 AND 99.9),
+	CONSTRAINT "recipe_ingredient_mix_ratio_one_decimal" CHECK ("recipe_ingredient"."mix_ratio" = round("recipe_ingredient"."mix_ratio", 1)),
 	CONSTRAINT "recipe_ingredient_position_range" CHECK ("recipe_ingredient"."position" BETWEEN 1 AND 20)
 );
 --> statement-breakpoint
@@ -99,6 +104,8 @@ CREATE TABLE "report" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"recipe_id" uuid,
 	"reporter_id" uuid,
+	"reported_member_id" uuid,
+	"target_state" "report_target_state" DEFAULT 'live' NOT NULL,
 	"reason" "report_reason" NOT NULL,
 	"detail" text,
 	"status" "report_status" DEFAULT 'open' NOT NULL,
@@ -127,10 +134,12 @@ ALTER TABLE "recipe_photo" ADD CONSTRAINT "recipe_photo_recipe_id_recipe_id_fk" 
 ALTER TABLE "recipe_step" ADD CONSTRAINT "recipe_step_recipe_id_recipe_id_fk" FOREIGN KEY ("recipe_id") REFERENCES "public"."recipe"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "report" ADD CONSTRAINT "report_recipe_id_recipe_id_fk" FOREIGN KEY ("recipe_id") REFERENCES "public"."recipe"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "report" ADD CONSTRAINT "report_reporter_id_member_id_fk" FOREIGN KEY ("reporter_id") REFERENCES "public"."member"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "report" ADD CONSTRAINT "report_reported_member_id_member_id_fk" FOREIGN KEY ("reported_member_id") REFERENCES "public"."member"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "save" ADD CONSTRAINT "save_member_id_member_id_fk" FOREIGN KEY ("member_id") REFERENCES "public"."member"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "save" ADD CONSTRAINT "save_recipe_id_recipe_id_fk" FOREIGN KEY ("recipe_id") REFERENCES "public"."recipe"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "follow_followee_id_idx" ON "follow" USING btree ("followee_id");--> statement-breakpoint
 CREATE INDEX "like_recipe_id_idx" ON "like" USING btree ("recipe_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "member_username_lower_unique" ON "member" USING btree (lower("username"));--> statement-breakpoint
 CREATE INDEX "recipe_member_id_idx" ON "recipe" USING btree ("member_id");--> statement-breakpoint
 CREATE INDEX "recipe_created_at_idx" ON "recipe" USING btree ("created_at");--> statement-breakpoint
 CREATE INDEX "recipe_search_text_trgm_idx" ON "recipe" USING gin ("search_text" gin_trgm_ops);--> statement-breakpoint

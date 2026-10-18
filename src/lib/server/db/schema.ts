@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
 	boolean,
 	check,
@@ -11,6 +12,7 @@ import {
 	text,
 	timestamp,
 	unique,
+	uniqueIndex,
 	uuid
 } from 'drizzle-orm/pg-core';
 
@@ -21,8 +23,10 @@ const updatedAt = () =>
 		.defaultNow()
 		.$onUpdate(() => new Date());
 
-/** Alcohol Content in percent, 0.0–100.0. */
-const abv = (name: string) => numeric(name, { precision: 4, scale: 1, mode: 'number' });
+// Unconstrained numeric + a `col = round(col, 1)` CHECK: numeric(p,1) would silently round
+// 0.15 to 0.2, but more than one decimal must be rejected (FR-005).
+const decimal1 = (name: string) => numeric(name, { mode: 'number' });
+const oneDecimal = (col: AnyPgColumn) => sql`${col} = round(${col}, 1)`;
 
 // One Member per login provider (FR-051, ADR 0005). Better Auth's own tables live elsewhere.
 export const member = pgTable(
@@ -32,7 +36,7 @@ export const member = pgTable(
 		provider: text('provider').notNull(),
 		providerAccountId: text('provider_account_id').notNull(),
 		// Null until the first-login Username setup (FR-052).
-		username: text('username').unique(),
+		username: text('username'),
 		bio: text('bio'),
 		iconKey: text('icon_key'),
 		isAdministrator: boolean('is_administrator').notNull().default(false),
@@ -42,6 +46,9 @@ export const member = pgTable(
 	},
 	(t) => [
 		unique('member_provider_account_unique').on(t.provider, t.providerAccountId),
+		check('member_provider_known', sql`${t.provider} IN ('google', 'line')`), // ADR 0005
+		// Case-insensitive so `Alice` cannot impersonate `alice` (FR-053).
+		uniqueIndex('member_username_lower_unique').on(sql`lower(${t.username})`),
 		check('member_username_format', sql`${t.username} ~ '^[A-Za-z0-9_]{3,20}$'`), // FR-053
 		check('member_bio_length', sql`char_length(${t.bio}) <= 200`) // FR-054
 	]
@@ -52,7 +59,7 @@ export const ingredient = pgTable(
 	{
 		id: uuid('id').primaryKey().defaultRandom(),
 		name: text('name').notNull().unique(),
-		abvPercent: abv('abv_percent').notNull(),
+		abvPercent: decimal1('abv_percent').notNull(),
 		isBaseSpirit: boolean('is_base_spirit').notNull().default(false),
 		isAlcoholic: boolean('is_alcoholic')
 			.notNull()
@@ -64,6 +71,7 @@ export const ingredient = pgTable(
 	(t) => [
 		check('ingredient_name_not_blank', sql`char_length(btrim(${t.name})) > 0`),
 		check('ingredient_abv_range', sql`${t.abvPercent} BETWEEN 0 AND 100`),
+		check('ingredient_abv_one_decimal', oneDecimal(t.abvPercent)),
 		// Only alcoholic Ingredients can be a Base (FR-010).
 		check('ingredient_base_is_alcoholic', sql`NOT ${t.isBaseSpirit} OR ${t.abvPercent} > 0`)
 	]
@@ -80,8 +88,8 @@ export const recipe = pgTable(
 		description: text('description').notNull().default(''),
 		mainPhotoKey: text('main_photo_key').notNull(), // FR-007
 		// ADR 0004: derived columns stored and recalculated in the same transaction as their inputs.
-		autoAbv: abv('auto_abv').notNull().default(0),
-		abvOverride: abv('abv_override'),
+		autoAbv: decimal1('auto_abv').notNull().default(0),
+		abvOverride: decimal1('abv_override'),
 		hasAlcohol: boolean('has_alcohol').notNull().default(false),
 		// Denormalised title + description + Ingredient names + step text for keyword search (FR-043).
 		searchText: text('search_text').notNull().default(''),
@@ -92,6 +100,8 @@ export const recipe = pgTable(
 		check('recipe_title_length', sql`char_length(${t.title}) BETWEEN 1 AND 50`),
 		check('recipe_description_length', sql`char_length(${t.description}) <= 500`),
 		check('recipe_auto_abv_range', sql`${t.autoAbv} BETWEEN 0 AND 100`),
+		check('recipe_auto_abv_one_decimal', oneDecimal(t.autoAbv)),
+		check('recipe_abv_override_one_decimal', oneDecimal(t.abvOverride)),
 		// FR-024: a Non-alcoholic Recipe is fixed at 0%.
 		check('recipe_non_alcoholic_zero', sql`${t.hasAlcohol} OR ${t.autoAbv} = 0`),
 		// FR-021/022: the upper bound (highest Ingredient ABV) is enforced in the service layer.
@@ -131,7 +141,7 @@ export const recipeIngredient = pgTable(
 		ingredientId: uuid('ingredient_id')
 			.notNull()
 			.references(() => ingredient.id, { onDelete: 'restrict' }),
-		mixRatio: numeric('mix_ratio', { precision: 3, scale: 1, mode: 'number' }).notNull(),
+		mixRatio: decimal1('mix_ratio').notNull(),
 		// Display order; the 1..20 range also caps the Ingredient count (FR-004).
 		position: smallint('position').notNull()
 	},
@@ -139,6 +149,7 @@ export const recipeIngredient = pgTable(
 		primaryKey({ columns: [t.recipeId, t.ingredientId] }), // no duplicate Ingredient (FR-004)
 		unique('recipe_ingredient_position_unique').on(t.recipeId, t.position),
 		check('recipe_ingredient_mix_ratio_range', sql`${t.mixRatio} BETWEEN 0.1 AND 99.9`), // FR-005
+		check('recipe_ingredient_mix_ratio_one_decimal', oneDecimal(t.mixRatio)),
 		check('recipe_ingredient_position_range', sql`${t.position} BETWEEN 1 AND 20`),
 		index('recipe_ingredient_ingredient_id_idx').on(t.ingredientId)
 	]
@@ -220,6 +231,12 @@ export const reportReason = pgEnum('report_reason', [
 	'other'
 ]);
 export const reportStatus = pgEnum('report_status', ['open', 'resolved', 'dismissed']);
+// Why a kept Report's recipe link is gone; set by the service in the delete/withdrawal transaction.
+export const reportTargetState = pgEnum('report_target_state', [
+	'live',
+	'recipe_deleted',
+	'member_withdrawn'
+]);
 
 // Reports outlive their Recipe and reporter (FR-008, FR-074, FR-078), hence the nullable FKs.
 export const report = pgTable(
@@ -228,6 +245,12 @@ export const report = pgTable(
 		id: uuid('id').primaryKey().defaultRandom(),
 		recipeId: uuid('recipe_id').references(() => recipe.id, { onDelete: 'set null' }),
 		reporterId: uuid('reporter_id').references(() => member.id, { onDelete: 'set null' }),
+		// Author of the Recipe, copied by the service at insert, so repeat offenders stay visible
+		// after the Recipe is deleted (FR-073/074). No Recipe content is kept (FR-078).
+		reportedMemberId: uuid('reported_member_id').references(() => member.id, {
+			onDelete: 'set null'
+		}),
+		targetState: reportTargetState('target_state').notNull().default('live'),
 		reason: reportReason('reason').notNull(),
 		detail: text('detail'),
 		status: reportStatus('status').notNull().default('open'),
