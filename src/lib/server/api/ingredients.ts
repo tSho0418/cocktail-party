@@ -7,8 +7,17 @@ import {
 	suggestSimilar,
 	updateIngredientAbv
 } from '#lib/server/services/ingredients/index.js';
+import { MAX_NAME_LENGTH } from '#lib/server/services/ingredients/name.js';
 import { isUuid } from '#lib/server/services/recipes/index.js';
-import { actorOf, firstValues, invalidRequest, isRecord, statusOf, type ApiEnv } from './http';
+import {
+	actorOf,
+	firstValues,
+	invalidRequest,
+	isRecord,
+	jsonBodyLimit,
+	statusOf,
+	type ApiEnv
+} from './http';
 
 type NewIngredient = { name: string; abvPercent: number; isBaseSpirit?: boolean };
 
@@ -19,6 +28,8 @@ function parseNew(v: unknown): NewIngredient | null {
 }
 
 const MAX_SUGGESTIONS = 20;
+// Twice the stored limit: the query may carry spaces or width variants that normalize away.
+const MAX_SUGGEST_NAME_LENGTH = MAX_NAME_LENGTH * 2;
 
 export const ingredientsRoute = () =>
 	new Hono<ApiEnv>()
@@ -28,7 +39,13 @@ export const ingredientsRoute = () =>
 			validator('query', (query, c) => {
 				const q = firstValues(query);
 				const limit = q.limit === undefined ? 5 : Number(q.limit);
-				if (!q.name || !Number.isInteger(limit) || limit < 1 || limit > MAX_SUGGESTIONS)
+				if (
+					!q.name ||
+					[...q.name].length > MAX_SUGGEST_NAME_LENGTH ||
+					!Number.isInteger(limit) ||
+					limit < 1 ||
+					limit > MAX_SUGGESTIONS
+				)
 					return invalidRequest(c);
 				return { name: q.name, limit };
 			}),
@@ -41,6 +58,7 @@ export const ingredientsRoute = () =>
 		.post(
 			'/',
 			requireMember,
+			jsonBodyLimit,
 			validator('json', (b, c) => parseNew(b) ?? invalidRequest(c)),
 			async (c) => {
 				const body = c.req.valid('json');
@@ -58,6 +76,7 @@ export const ingredientsRoute = () =>
 		.patch(
 			'/:id/abv',
 			requireAdministrator,
+			jsonBodyLimit,
 			validator('json', (b, c) =>
 				isRecord(b) && typeof b.abvPercent === 'number'
 					? { abvPercent: b.abvPercent }

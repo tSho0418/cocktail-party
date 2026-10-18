@@ -195,6 +195,25 @@ export const recipePhoto = pgTable(
 	]
 );
 
+// Who uploaded which photo (the uuid in `<kind>/<id>/{list,detail}.webp`). A Recipe may only use
+// uploads of its own Member, and an upload row is deleted when its photo is released, so a key
+// that is not here can neither be attached nor deleted from storage (README "Photo uploads").
+export const photoUpload = pgTable(
+	'photo_upload',
+	{
+		id: uuid('id').primaryKey(),
+		memberId: uuid('member_id')
+			.notNull()
+			.references(() => member.id, { onDelete: 'cascade' }),
+		kind: text('kind').notNull(),
+		createdAt: createdAt()
+	},
+	(t) => [
+		check('photo_upload_kind', sql`${t.kind} IN ('recipe', 'member')`),
+		index('photo_upload_member_id_idx').on(t.memberId)
+	]
+);
+
 export const recipeIngredient = pgTable(
 	'recipe_ingredient',
 	{

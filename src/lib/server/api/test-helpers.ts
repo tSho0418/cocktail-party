@@ -2,6 +2,7 @@
 import { db } from '#lib/server/db/index.js';
 import { member } from '#lib/server/db/schema.js';
 import { memoryImageStore } from '#lib/server/services/images/index.js';
+import { jpegWithGps } from '#lib/server/services/images/test-fixtures.js';
 import { createApp } from './app';
 
 export const store = memoryImageStore();
@@ -39,4 +40,22 @@ export function call(
 			{ locals: { member: as } }
 		)
 	);
+}
+
+/** POST /api/photos as `as` through the real route (records the upload); returns the stored keys. */
+export async function uploadPhoto(
+	as: TestMember,
+	kind: 'recipe' | 'member' = 'recipe'
+): Promise<{ list: string; detail: string }> {
+	const res = await defaultApp.request(
+		`/api/photos?kind=${kind}`,
+		{
+			method: 'POST',
+			body: new Uint8Array(await jpegWithGps()),
+			headers: { 'content-type': 'application/octet-stream' }
+		},
+		{ locals: { member: as } }
+	);
+	if (res.status !== 201) throw new Error(`photo upload failed: ${res.status}`);
+	return (await res.json()).keys;
 }

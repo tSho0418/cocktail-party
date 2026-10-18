@@ -1,7 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { db } from '#lib/server/db/index.js';
-import { account, member, session } from '#lib/server/db/schema.js';
+import { account, ingredient, member, recipe, session } from '#lib/server/db/schema.js';
+import { recordPhotoUpload } from '#lib/server/services/recipes/index.js';
 import { auth, resolveMember } from './index';
 import { viaHandle as viaHandleAt } from './test/via-handle';
 
@@ -64,7 +66,8 @@ const memberOfAccount = async (accountId: string) =>
 			.where(eq(account.accountId, accountId))
 	)[0]?.member;
 
-const viaHandle = (path: string, cookie?: string) => viaHandleAt(`${ORIGIN}${path}`, cookie);
+const viaHandle = (path: string, cookie?: string, init?: RequestInit) =>
+	viaHandleAt(`${ORIGIN}${path}`, cookie, init);
 
 describe('LINE login (stubbed provider)', () => {
 	it('creates a Member without email or Username, then sends it to /welcome (FR-050, FR-052)', async () => {
@@ -110,6 +113,59 @@ describe('Suspension (FR-075)', () => {
 		// Better Auth's own endpoint behind the same handle cannot hand the session back either.
 		const got = await viaHandle('/api/auth/get-session', cookie);
 		expect(await got.json()).toBeNull();
+	});
+
+	it('refuses the Member’s Recipe writes and hides their Recipes through the real API (FR-075)', async () => {
+		const cookie = cookiesOf(await lineLogin({ sub: 'U-suspend-recipes' }));
+		const m = (await memberOfAccount('U-suspend-recipes'))!;
+		await db.update(member).set({ username: 'suspend_writer' }).where(eq(member.id, m.id));
+		const [{ id: ingredientId }] = await db
+			.insert(ingredient)
+			.values({ name: `停止${randomUUID()}`, abvPercent: 0 })
+			.returning();
+		const json = (method: string, body?: unknown): RequestInit => ({
+			method,
+			headers: { 'content-type': 'application/json' },
+			body: body === undefined ? undefined : JSON.stringify(body)
+		});
+		const recipeBody = async (title: string) => {
+			const photoId = randomUUID();
+			await recordPhotoUpload(db, m.id, 'recipe', photoId);
+			return {
+				title,
+				mainPhotoKey: `recipe/${photoId}/list.webp`,
+				ingredients: [{ ingredientId, mixRatio: 1 }],
+				steps: ['混ぜる']
+			};
+		};
+		const title = `停止中${randomUUID().slice(0, 8)}`;
+
+		// Signed in and active: the same routes work.
+		const created = await viaHandle('/api/recipes', cookie, json('POST', await recipeBody(title)));
+		expect(created.status).toBe(201);
+		const { id } = await created.json();
+		const titlesFound = async () =>
+			(
+				await (await viaHandle(`/api/recipes?keyword=${encodeURIComponent(title)}`)).json()
+			).items.map((r: { title: string }) => r.title);
+		expect(await titlesFound()).toEqual([title]);
+		expect((await viaHandle(`/api/recipes/${id}`)).status).toBe(200);
+
+		await db.update(member).set({ suspendedAt: new Date() }).where(eq(member.id, m.id));
+
+		const next = await recipeBody(`${title}改`);
+		expect((await viaHandle('/api/recipes', cookie, json('POST', next))).status).toBe(401);
+		expect((await viaHandle(`/api/recipes/${id}`, cookie, json('PUT', next))).status).toBe(401);
+		expect((await viaHandle(`/api/recipes/${id}`, cookie, json('DELETE'))).status).toBe(401);
+		expect(
+			(await viaHandle('/api/ingredients', cookie, json('POST', { name: 'x', abvPercent: 0 })))
+				.status
+		).toBe(401);
+		expect(await db.select().from(recipe).where(eq(recipe.id, id))).toHaveLength(1);
+
+		// Their Recipes disappear from the public detail and search.
+		expect((await viaHandle(`/api/recipes/${id}`)).status).toBe(404);
+		expect(await titlesFound()).toEqual([]);
 	});
 
 	it('refuses sign-in while suspended', async () => {

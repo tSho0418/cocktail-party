@@ -36,6 +36,9 @@ export type RecipeSummary = {
 
 export const DEFAULT_LIMIT = 20;
 export const MAX_LIMIT = 50;
+/** Each keyword term is an ilike clause and each id a bound parameter, so both are capped. */
+export const MAX_KEYWORD_TERMS = 10;
+export const MAX_FILTER_IDS = 20;
 
 type Cursor = { s: 'new' | 'like'; l: number; t: string; i: string };
 
@@ -77,12 +80,16 @@ export async function searchRecipes(
 	const limit = params.limit ?? DEFAULT_LIMIT;
 	const ingredientIds = [...new Set(params.ingredientIds ?? [])];
 	const baseIds = [...new Set(params.baseIds ?? [])];
+	const terms = params.keyword?.split(/\s+/).filter(Boolean) ?? [];
 	const cursor = params.cursor ? decodeCursor(params.cursor, sort) : null;
 	if (
 		!Number.isInteger(limit) ||
 		limit < 1 ||
 		limit > MAX_LIMIT ||
 		(params.cursor && !cursor) ||
+		terms.length > MAX_KEYWORD_TERMS ||
+		ingredientIds.length > MAX_FILTER_IDS ||
+		baseIds.length > MAX_FILTER_IDS ||
 		!ingredientIds.every(isUuid) ||
 		!baseIds.every(isUuid) ||
 		[params.abvMin, params.abvMax].some((n) => n !== undefined && !Number.isFinite(n))
@@ -102,7 +109,7 @@ export async function searchRecipes(
 			sql`${recipe.id} in (select ${recipeIngredient.recipeId} from ${recipeIngredient} where ${inArray(recipeIngredient.ingredientId, ingredientIds)} group by 1 having count(*) = ${ingredientIds.length})`
 		);
 	}
-	for (const term of params.keyword?.split(/\s+/).filter(Boolean) ?? [])
+	for (const term of terms)
 		where.push(sql`${recipe.searchText} ilike ${literal(term)} escape '\\'`);
 	if (baseIds.length > 0)
 		where.push(
