@@ -38,6 +38,17 @@
 		timer = setTimeout(search, 250);
 	}
 
+	// Enter belongs to the search box: it looks up now instead of submitting the surrounding form.
+	function onkeydown(e: KeyboardEvent) {
+		if (e.key !== 'Enter' || e.isComposing) return;
+		e.preventDefault();
+		clearTimeout(timer);
+		if (name) {
+			searching = true;
+			void search();
+		}
+	}
+
 	async function search() {
 		const mine = ++seq;
 		try {
@@ -97,6 +108,7 @@
 		type="search"
 		bind:value={query}
 		{oninput}
+		{onkeydown}
 		autocomplete="off"
 		aria-describedby="{id}-help"
 		placeholder="例: ジン、ライムジュース"

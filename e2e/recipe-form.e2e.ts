@@ -8,3 +8,13 @@ test.describe('signed out', () => {
 			await expect(page).toHaveURL('/login');
 		});
 });
+
+test('Enter in the Ingredient search does not submit the Recipe form', async ({ page }) => {
+	await page.goto('/dev/ingredient-picker');
+	await page.getByLabel('材料を探す').fill('ジン');
+	await page.getByLabel('材料を探す').press('Enter');
+	await expect(page.locator('output')).toHaveAttribute('data-submits', '0');
+	// Enter elsewhere in a form still submits it: the button does.
+	await page.getByRole('button', { name: '送信' }).click();
+	await expect(page.locator('output')).toHaveAttribute('data-submits', '1');
+});

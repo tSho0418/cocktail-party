@@ -91,30 +91,17 @@ export function previewAlcohol(
 ): AlcoholPreview {
 	// A duplicate Ingredient is reported by validateForm; the preview must not count it twice.
 	const seen = new Set<string>();
-	const unique = rows.flatMap(({ ingredient, mixRatio }) => {
-		const ratio = parseMixRatio(mixRatio);
-		if (ratio === null || seen.has(ingredient.id)) return [];
-		seen.add(ingredient.id);
-		return [{ ...ingredient, mixRatio: ratio }];
-	});
-	if (unique.length === 0)
-		return {
-			counted: 0,
-			hasAlcohol: false,
-			maxIngredientAbv: 0,
-			autoAbv: null,
-			override: { state: 'none' },
-			effectiveAbv: null
-		};
-	const derived = recomputeDerived(unique);
+	const selected = rows.filter(
+		({ ingredient }) => !seen.has(ingredient.id) && seen.add(ingredient.id)
+	);
+	// "Has alcohol" and the override range follow the chosen Ingredients, not their Mix Ratios, so a
+	// half-typed ratio (backspace, "0" on the way to "0.5") never changes what the override may be.
+	const alcohol = hasAlcohol(selected.map((r) => r.ingredient));
+	const maxIngredientAbv = Math.max(0, ...selected.map((r) => r.ingredient.abvPercent));
 	const typed = overrideText.trim() === '' ? null : Number(overrideText);
 	let override: AlcoholPreview['override'] = { state: 'none' };
-	if (derived.hasAlcohol && typed !== null) {
-		const v = validateAbvOverride({
-			override: typed,
-			hasAlcohol: true,
-			maxIngredientAbv: derived.maxIngredientAbv
-		});
+	if (alcohol && typed !== null) {
+		const v = validateAbvOverride({ override: typed, hasAlcohol: true, maxIngredientAbv });
 		override = v.ok
 			? { state: 'valid', value: v.value }
 			: {
@@ -122,13 +109,19 @@ export function previewAlcohol(
 					reason: v.error as 'not_a_number' | 'too_many_decimals' | 'out_of_range'
 				};
 	}
+	// The auto value (FR-020) needs a valid Mix Ratio on the rows it is computed from.
+	const counted = selected.flatMap(({ ingredient, mixRatio }) => {
+		const ratio = parseMixRatio(mixRatio);
+		return ratio === null ? [] : [{ ...ingredient, mixRatio: ratio }];
+	});
+	const autoAbv = counted.length > 0 ? recomputeDerived(counted).autoAbv : null;
 	return {
-		counted: unique.length,
-		hasAlcohol: hasAlcohol(unique),
-		maxIngredientAbv: derived.maxIngredientAbv,
-		autoAbv: derived.autoAbv,
+		counted: counted.length,
+		hasAlcohol: alcohol,
+		maxIngredientAbv,
+		autoAbv,
 		override,
-		effectiveAbv: override.state === 'valid' ? override.value : derived.autoAbv
+		effectiveAbv: override.state === 'valid' ? override.value : autoAbv
 	};
 }
 

@@ -48,9 +48,10 @@
 	const errors = $derived(validateForm(values));
 	const preview = $derived(previewAlcohol(values.ingredients, values.abvOverride));
 
-	// FR-024: without alcohol the Alcohol Content is fixed at 0%; a leftover override is dropped.
+	// FR-024: without alcohol the Alcohol Content is fixed at 0%; a leftover override is dropped once no
+	// chosen Ingredient has alcohol (whatever the Mix Ratios say).
 	$effect(() => {
-		if (preview.counted > 0 && !preview.hasAlcohol && values.abvOverride !== '')
+		if (values.ingredients.length > 0 && !preview.hasAlcohol && values.abvOverride !== '')
 			values.abvOverride = '';
 	});
 

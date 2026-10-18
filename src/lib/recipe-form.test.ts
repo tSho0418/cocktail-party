@@ -75,6 +75,20 @@ describe('previewAlcohol (FR-020..024)', () => {
 		expect(previewAlcohol([row(1, gin, '1'), row(2, tonic, 'x')], '').autoAbv).toBe(40);
 	});
 
+	it('judges alcohol and the override range by the chosen Ingredients, not their Mix Ratios', () => {
+		// A half-typed ratio ("" or "0" on the way to "0.5") must not make the override disappear.
+		for (const ratio of ['', '0', 'x']) {
+			const p = previewAlcohol([row(1, gin, ratio), row(2, tonic, '3')], '12');
+			expect(p).toMatchObject({
+				hasAlcohol: true,
+				maxIngredientAbv: 40,
+				override: { state: 'valid', value: 12 }
+			});
+		}
+		expect(previewAlcohol([row(1, gin, ''), row(2, tonic, '3')], '').autoAbv).toBe(0);
+		expect(previewAlcohol([row(1, tonic, ''), row(2, tonic, '')], '5').hasAlcohol).toBe(false);
+	});
+
 	it('counts a duplicate Ingredient once', () => {
 		expect(previewAlcohol([row(1, gin, '1'), row(2, gin, '1')], '').autoAbv).toBe(40);
 	});
