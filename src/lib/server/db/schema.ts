@@ -28,15 +28,18 @@ const updatedAt = () =>
 const decimal1 = (name: string) => numeric(name, { mode: 'number' });
 const oneDecimal = (col: AnyPgColumn) => sql`${col} = round(${col}, 1)`;
 
-// One Member per login provider (FR-051, ADR 0005). Better Auth's own tables live elsewhere.
+// Also Better Auth's user table (README.md "Auth" has the field mapping), so
+// withdrawal and Suspension stay in the app's own transactions (ADR 0005).
 export const member = pgTable(
 	'member',
 	{
 		id: uuid('id').primaryKey().defaultRandom(),
-		provider: text('provider').notNull(),
-		providerAccountId: text('provider_account_id').notNull(),
 		// Null until the first-login Username setup (FR-052).
 		username: text('username'),
+		// Always null: LINE may not return one (FR-050), and a stored email would let Better Auth
+		// match a different provider's login to this Member (FR-051).
+		email: text('email'),
+		emailVerified: boolean('email_verified').notNull().default(false),
 		bio: text('bio'),
 		iconKey: text('icon_key'),
 		isAdministrator: boolean('is_administrator').notNull().default(false),
@@ -45,13 +48,71 @@ export const member = pgTable(
 		updatedAt: updatedAt()
 	},
 	(t) => [
-		unique('member_provider_account_unique').on(t.provider, t.providerAccountId),
-		check('member_provider_known', sql`${t.provider} IN ('google', 'line')`), // ADR 0005
 		// Case-insensitive so `Alice` cannot impersonate `alice` (FR-053).
 		uniqueIndex('member_username_lower_unique').on(sql`lower(${t.username})`),
 		check('member_username_format', sql`${t.username} ~ '^[A-Za-z0-9_]{3,20}$'`), // FR-053
 		check('member_bio_length', sql`char_length(${t.bio}) <= 200`) // FR-054
 	]
+);
+
+// Better Auth's tables. Column sets follow its core schema; uuid ids (generateId: 'uuid' leaves them to the DB default).
+export const account = pgTable(
+	'account',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		accountId: text('account_id').notNull(),
+		providerId: text('provider_id').notNull(),
+		userId: uuid('user_id')
+			.notNull()
+			.references(() => member.id, { onDelete: 'cascade' }),
+		accessToken: text('access_token'),
+		refreshToken: text('refresh_token'),
+		idToken: text('id_token'),
+		accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }),
+		refreshTokenExpiresAt: timestamp('refresh_token_expires_at', { withTimezone: true }),
+		scope: text('scope'),
+		// Always null (no email/password login, FR-050); Better Auth's schema check requires it.
+		password: text('password'),
+		createdAt: createdAt(),
+		updatedAt: updatedAt()
+	},
+	(t) => [
+		// One Member per login provider account, and one provider per Member (FR-051, ADR 0005).
+		unique('account_provider_account_unique').on(t.providerId, t.accountId),
+		unique('account_user_unique').on(t.userId),
+		check('account_provider_known', sql`${t.providerId} IN ('google', 'line')`)
+	]
+);
+
+export const session = pgTable(
+	'session',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		token: text('token').notNull().unique(),
+		userId: uuid('user_id')
+			.notNull()
+			.references(() => member.id, { onDelete: 'cascade' }),
+		expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+		ipAddress: text('ip_address'),
+		userAgent: text('user_agent'),
+		createdAt: createdAt(),
+		updatedAt: updatedAt()
+	},
+	(t) => [index('session_user_id_idx').on(t.userId)]
+);
+
+// OAuth state between sign-in and callback.
+export const verification = pgTable(
+	'verification',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		identifier: text('identifier').notNull(),
+		value: text('value').notNull(),
+		expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+		createdAt: createdAt(),
+		updatedAt: updatedAt()
+	},
+	(t) => [index('verification_identifier_idx').on(t.identifier)]
 );
 
 export const ingredient = pgTable(

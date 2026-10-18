@@ -17,6 +17,9 @@ if (process.env.VITEST_DB) {
 	const url = new URL(process.env.DATABASE_URL_TEST);
 	url.pathname = `/${process.env.TEST_DATABASE_NAME}`;
 	process.env.DATABASE_URL = url.href;
+	// Dummy OAuth apps: the auth db tests stub the provider's token endpoint.
+	process.env.LINE_CLIENT_ID = 'test-line';
+	process.env.LINE_CLIENT_SECRET = 'test-line-secret';
 }
 
 export default defineConfig({
