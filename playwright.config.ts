@@ -7,6 +7,8 @@ export default defineConfig({
 	webServer: {
 		command: 'pnpm build && pnpm preview',
 		port: 4173,
-		reuseExistingServer: !process.env.CI
+		env: { E2E_HARNESS: '1' }, // serves /dev/* harness pages; production builds 404 them
+		// Opt-in only: other worktrees on this machine may already be serving port 4173.
+		reuseExistingServer: !!process.env.PW_REUSE_SERVER
 	}
 });
