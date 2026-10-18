@@ -20,30 +20,41 @@ Requires Node 22, pnpm 9 (`corepack enable`) and Docker (for the local Postgres)
 
 ```sh
 pnpm install
-cp .env.example .env      # defaults point at the docker-compose Postgres
-pnpm db:up                # postgres:17 on :5432 (databases cocktail_party and cocktail_party_test)
-pnpm db:migrate           # apply drizzle/ (incl. pg_trgm)
-pnpm dev                  # http://localhost:5173
+cp .env.example .env        # defaults point at the docker-compose Postgres
+pnpm db:up                  # postgres:17 on 127.0.0.1:5432, or reuse one already running there
+pnpm db:migrate             # apply drizzle/ (incl. pg_trgm)
+pnpm db:seed:ingredients    # initial Ingredient master (DT-001), idempotent
+pnpm dev                    # http://localhost:5173
 ```
 
-| Script                        |                                                                                                                                        |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm check`                  | svelte-check / TypeScript                                                                                                              |
-| `pnpm lint`                   | Prettier + ESLint (`pnpm format` to fix)                                                                                               |
-| `pnpm test`                   | Vitest unit tests (`src/**/*.test.ts`, no DB)                                                                                          |
-| `pnpm test:db`                | Integration tests (`src/**/*.db.test.ts`) against `DATABASE_URL_TEST`. Each run drops that database's schema and re-applies `drizzle/` |
-| `pnpm test:e2e`               | Playwright smoke against `pnpm build && pnpm preview`. First run: `pnpm exec playwright install chromium`                              |
-| `pnpm build` / `pnpm preview` | Production build / serve it on :4173                                                                                                   |
-| `pnpm db:up` / `pnpm db:down` | Start (and wait for healthy) / stop the local Postgres                                                                                 |
-| `pnpm db:reset`               | Delete the local volume, restart and migrate                                                                                           |
-| `pnpm db:generate`            | Generate a migration from the schema (no DB needed)                                                                                    |
-| `pnpm db:migrate`             | Apply migrations to `$DATABASE_URL` from the shell (drizzle-kit does not read `.env`), else the local compose DB                       |
+| Script                        |                                                                                                                                                                                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm check`                  | svelte-check / TypeScript                                                                                                                                                                                                             |
+| `pnpm lint`                   | Prettier + ESLint (`pnpm format` to fix)                                                                                                                                                                                              |
+| `pnpm test`                   | Vitest unit tests (`src/**/*.test.ts`, no DB)                                                                                                                                                                                         |
+| `pnpm test:db`                | Integration tests (`src/**/*.db.test.ts`) in a throwaway database, see below                                                                                                                                                          |
+| `pnpm test:e2e`               | Playwright smoke against `pnpm build && pnpm preview`. First run: `pnpm exec playwright install chromium`                                                                                                                             |
+| `pnpm build` / `pnpm preview` | Production build / serve it on :4173                                                                                                                                                                                                  |
+| `pnpm db:up`                  | Start the compose Postgres and wait until healthy. If a Postgres 17+ already answers on the `DATABASE_URL` host (e.g. another worktree's compose), reuse it instead of failing on the port clash. Creates the app database if missing |
+| `pnpm db:down`                | Stop this checkout's compose Postgres (does nothing to one started elsewhere)                                                                                                                                                         |
+| `pnpm db:reset`               | Drop and recreate the app database (`DATABASE_URL`), then migrate. Other databases on the server are untouched                                                                                                                        |
+| `pnpm db:seed:ingredients`    | Insert the DT-001 Ingredients missing from `DATABASE_URL` (matched by normalized name; existing rows are not changed)                                                                                                                 |
+| `pnpm db:generate`            | Generate a migration from the schema (no DB needed)                                                                                                                                                                                   |
+| `pnpm db:migrate`             | Apply migrations to `$DATABASE_URL`                                                                                                                                                                                                   |
+
+`db:*` scripts read `DATABASE_URL` from the shell, not `.env` (drizzle-kit does not load it), and default to `postgres://postgres:postgres@localhost:5432/cocktail_party`.
+
+### DB tests and parallel worktrees
+
+`DATABASE_URL_TEST` names only the server and credentials (default `postgres://postgres:postgres@localhost:5432/postgres`). Each `pnpm test:db` run creates its own database `cocktail_party_test_<random>`, applies `drizzle/`, runs the tests and drops it afterwards, also when tests fail. Several worktrees can therefore share one Postgres and run `pnpm test:db` at the same time. A run killed hard (e.g. `kill -9`) can leave a `cocktail_party_test_*` database behind; drop it by hand.
+
+The app database is shared, though: worktrees using the same `DATABASE_URL` see each other's data, and `pnpm db:reset` resets it for all of them. Give a worktree its own `DATABASE_URL` database name if that matters.
+
+### Notes
 
 The first migration enables `pg_trgm` by a line added by hand to `drizzle/0000_init.sql`; drizzle-kit does not emit `CREATE EXTENSION`.
 
 The DB client (`#lib/server/db`) uses node-postgres. Locally it talks to the compose Postgres; in production set `DATABASE_URL` to Neon's pooled connection string (`-pooler` host, `sslmode=require`).
-
-The test database is created by the compose init script only when the volume is first created; on an older volume run `pnpm db:reset`.
 
 ## Photos (ADR 0003)
 

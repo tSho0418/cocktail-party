@@ -2,19 +2,41 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import pg from 'pg';
 
-// Fresh schema per run: drop everything (incl. pg_trgm and drizzle's journal), then apply drizzle/.
-export async function setup() {
-	// Set by vite.config.ts only under `pnpm test:db`, so this never wipes the dev database.
-	const url = process.env.DATABASE_URL_TEST;
-	if (!process.env.VITEST_DB || !url) throw new Error('Run DB tests with `pnpm test:db`');
-	const client = new pg.Client({ connectionString: url });
+async function exec(connectionString: string, query: string) {
+	const client = new pg.Client({ connectionString });
 	await client.connect();
 	try {
-		await client.query(
-			'DROP SCHEMA IF EXISTS public CASCADE; DROP SCHEMA IF EXISTS drizzle CASCADE; CREATE SCHEMA public;'
-		);
-		await migrate(drizzle({ client }), { migrationsFolder: 'drizzle' });
+		await client.query(query);
 	} finally {
 		await client.end();
 	}
+}
+
+// Creates this run's own database (named in vite.config.ts), applies drizzle/, and returns the
+// teardown that drops it; Vitest runs the teardown whether the tests pass or fail.
+export async function setup() {
+	const {
+		VITEST_DB,
+		DATABASE_URL_TEST: server,
+		TEST_DATABASE_NAME: name,
+		DATABASE_URL: url
+	} = process.env;
+	if (!VITEST_DB || !server || !name || !url) throw new Error('Run DB tests with `pnpm test:db`');
+	if (!/^cocktail_party_test_[0-9a-f]+$/.test(name)) throw new Error(`Unexpected test DB ${name}`);
+
+	await exec(server, `CREATE DATABASE "${name}"`);
+	const drop = () => exec(server, `DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+	try {
+		const client = new pg.Client({ connectionString: url });
+		await client.connect();
+		try {
+			await migrate(drizzle({ client }), { migrationsFolder: 'drizzle' });
+		} finally {
+			await client.end();
+		}
+	} catch (e) {
+		await drop();
+		throw e;
+	}
+	return drop;
 }

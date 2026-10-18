@@ -16,9 +16,10 @@
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "drizzle-kit migrate",
 		"test:db": "VITEST_DB=1 vitest --run --project db",
-		"db:up": "docker compose up -d --wait",
+		"db:up": "node scripts/db.mjs up",
 		"db:down": "docker compose down",
-		"db:reset": "docker compose down -v && docker compose up -d --wait && drizzle-kit migrate"
+		"db:reset": "node scripts/db.mjs reset && drizzle-kit migrate",
+		"db:seed:ingredients": "node scripts/seed-ingredients.mjs"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",

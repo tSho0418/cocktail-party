@@ -41,7 +41,7 @@ describe('recipe and ingredient constraints', () => {
 		const m = await insertMember('tester');
 		const [gin] = await db
 			.insert(ingredient)
-			.values({ name: 'ジン', abvPercent: 40, isBaseSpirit: true })
+			.values({ name: 'スキーマ・ジン', abvPercent: 40, isBaseSpirit: true })
 			.returning();
 		const [r] = await db
 			.insert(recipe)
@@ -69,7 +69,7 @@ describe('recipe and ingredient constraints', () => {
 	it('accepts mix_ratio 0.1..99.9 with one decimal and rejects the rest (FR-005)', async () => {
 		const [vermouth] = await db
 			.insert(ingredient)
-			.values({ name: 'ドライ・ベルモット', abvPercent: 18 })
+			.values({ name: 'スキーマ・ベルモット', abvPercent: 18 })
 			.returning();
 		const where = eq(recipeIngredient.ingredientId, vermouth.id);
 		const insert = (mixRatio: number) =>
