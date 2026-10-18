@@ -3,9 +3,10 @@ name: Deploy
 # CD for main: full CI including e2e, then migrate the Neon database and deploy to Vercel.
 # Required in the `production` environment: DATABASE_URL, VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID.
 # App runtime env vars (BETTER_AUTH_*, GOOGLE_*, LINE_*, R2_*) live in the Vercel project.
+# Disabled for now (CD postponed): runs only when started by hand from the Actions tab.
+# To enable, restore `push: branches: [main]` here.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read

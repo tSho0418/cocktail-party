@@ -82,7 +82,7 @@ The db tests drive Better Auth's real sign-in and callback for LINE with the tok
 
 Work on a branch off `develop` and open a PR into `develop`; link the issue with `Closes #N`. Merging needs the CI workflow green (`check`, `lint`, `test`, `build`, `test:db`).
 
-`develop` is released by a PR into `main`. That PR also runs the Playwright e2e job. A push to `main` (the merge) runs `.github/workflows/deploy.yml`: the full CI including e2e, then `pnpm db:migrate` against Neon, then a Vercel production deploy. Migrations run before the new code is live, so keep them backward compatible with the running version.
+`develop` is released by a PR into `main`. That PR also runs the Playwright e2e job. Deploy is postponed: `.github/workflows/deploy.yml` runs only by hand (`workflow_dispatch`); once enabled, a push to `main` runs it: the full CI including e2e, then `pnpm db:migrate` against Neon, then a Vercel production deploy. Migrations run before the new code is live, so keep them backward compatible with the running version.
 
 The `production` GitHub environment needs the secrets `DATABASE_URL`, `VERCEL_TOKEN`, `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`. App runtime variables (`BETTER_AUTH_*`, `GOOGLE_*`, `LINE_*`, `R2_*`) are set in the Vercel project.
 
