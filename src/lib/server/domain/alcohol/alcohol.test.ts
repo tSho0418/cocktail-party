@@ -9,7 +9,8 @@ import {
 	resolveEffectiveAbv,
 	roundAbv,
 	validateAbvOverride,
-	validateMixRatio
+	validateMixRatio,
+	validateRecipeIngredients
 } from '.';
 
 const gin = { id: 'gin', mixRatio: 6, abvPercent: 40, isBaseSpirit: true };
@@ -37,6 +38,26 @@ describe('computeAutoAbv', () => {
 	it('rejects an empty Recipe', () => {
 		expect(() => computeAutoAbv([])).toThrow(RangeError);
 	});
+
+	it('rejects an all-zero total ratio instead of returning NaN', () => {
+		expect(() => computeAutoAbv([{ mixRatio: 0, abvPercent: 40 }])).toThrow(/more than 0/);
+	});
+});
+
+describe('validateRecipeIngredients', () => {
+	const ids = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `i${i}` }));
+
+	it.each([1, 20])('accepts %s Ingredients', (n) => {
+		expect(validateRecipeIngredients(ids(n)).ok).toBe(true);
+	});
+
+	it.each([
+		[[], 'empty'],
+		[ids(21), 'too_many'],
+		[[gin, vermouth, gin], 'duplicate']
+	])('rejects %j (%s)', (items, error) => {
+		expect(validateRecipeIngredients(items)).toEqual({ ok: false, error });
+	});
 });
 
 describe('hasAlcohol / isNonAlcoholic', () => {
@@ -56,13 +77,18 @@ describe('validateMixRatio', () => {
 		expect(validateMixRatio(r)).toEqual({ ok: true, value: r });
 	});
 
-	it.each([0, 0.05, 100, -1, Infinity])('rejects %s as out of range', (r) => {
-		const result = validateMixRatio(r);
-		expect(result.ok).toBe(false);
-	});
-
-	it.each([0.15, 1.23, 0.1 + 0.2, NaN])('rejects %s as having too many decimals', (r) => {
-		expect(validateMixRatio(r)).toEqual({ ok: false, error: 'too_many_decimals' });
+	it.each([
+		[0, 'out_of_range'],
+		[100, 'out_of_range'],
+		[-1, 'out_of_range'],
+		[0.05, 'too_many_decimals'],
+		[0.15, 'too_many_decimals'],
+		[1.23, 'too_many_decimals'],
+		[0.1 + 0.2, 'too_many_decimals'],
+		[NaN, 'not_a_number'],
+		[Infinity, 'not_a_number']
+	])('rejects %s (%s)', (r, error) => {
+		expect(validateMixRatio(r)).toEqual({ ok: false, error });
 	});
 });
 
@@ -73,7 +99,9 @@ describe('validateAbvOverride', () => {
 		[0, 'out_of_range'],
 		[-1, 'out_of_range'],
 		[40.1, 'out_of_range'],
-		[0.01, 'too_many_decimals']
+		[0.01, 'too_many_decimals'],
+		[NaN, 'not_a_number'],
+		[Infinity, 'not_a_number']
 	])('rejects %s (%s)', (override, error) => {
 		expect(validateAbvOverride({ ...base, override })).toEqual({ ok: false, error });
 	});
@@ -186,7 +214,9 @@ describe('recomputeDerived', () => {
 			autoAbv: 36.4,
 			hasAlcohol: true,
 			maxIngredientAbv: 40,
-			baseIngredientIds: ['gin']
+			baseIngredientIds: ['gin'],
+			abvOverride: null,
+			overrideDiscarded: false
 		});
 	});
 
@@ -195,7 +225,9 @@ describe('recomputeDerived', () => {
 			autoAbv: 0,
 			hasAlcohol: false,
 			maxIngredientAbv: 0,
-			baseIngredientIds: []
+			baseIngredientIds: [],
+			abvOverride: null,
+			overrideDiscarded: false
 		});
 	});
 
@@ -207,6 +239,38 @@ describe('recomputeDerived', () => {
 		];
 		expect(computeAutoAbv(items)).toBeLessThan(31.95); // float lands at 31.949999999999996
 		expect(recomputeDerived(items).autoAbv).toBe(32);
+	});
+
+	it('floors a Recipe with alcohol at 0.1 so it never reads as 0%', () => {
+		const items = [
+			{ id: 'bitter', mixRatio: 0.1, abvPercent: 0.5, isBaseSpirit: false },
+			{ id: 'water', mixRatio: 99.9, abvPercent: 0, isBaseSpirit: false }
+		];
+		expect(recomputeDerived(items)).toMatchObject({ autoAbv: 0.1, hasAlcohol: true });
+	});
+
+	it('throws on Ingredients that fail validateRecipeIngredients', () => {
+		expect(() => recomputeDerived([gin, gin])).toThrow(/duplicate/);
+		expect(() => recomputeDerived([])).toThrow(/empty/);
+	});
+
+	it.each([
+		['no override', null, null, false],
+		['an override still in range', 30, 30, false],
+		['an override above the new highest ABV', 40.1, null, true]
+	])('reconciles %s', (_, currentOverride, abvOverride, overrideDiscarded) => {
+		expect(recomputeDerived([gin, vermouth], currentOverride)).toMatchObject({
+			abvOverride,
+			overrideDiscarded
+		});
+	});
+
+	it('discards the override when the Recipe loses its alcohol', () => {
+		expect(recomputeDerived([tonic], 5)).toMatchObject({
+			autoAbv: 0,
+			abvOverride: null,
+			overrideDiscarded: true
+		});
 	});
 
 	it('keeps multiple Bases', () => {
