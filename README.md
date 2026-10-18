@@ -121,6 +121,13 @@ Work on a branch off `develop` and open a PR into `develop`; link the issue with
 
 The `production` GitHub environment needs the secrets `DATABASE_URL`, `VERCEL_TOKEN`, `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`. App runtime variables (`BETTER_AUTH_*`, `GOOGLE_*`, `LINE_*`, `R2_*`) are set in the Vercel project.
 
+### 日本語で書くもの
+
+Issue、PR、レビュー、コメント、コミットメッセージは日本語で書きます。コードの識別子、パス、`Closes #N`、FR-/NFR-/ADR の番号、用語集の語(Recipe、Member など)は英語のままにします。
+
+- PR には対応する Issue を `Closes #N` で書きます。
+- レビューは先頭行に `APPROVE` または `REQUEST CHANGES` を書き、続けて日本語で理由を書きます(例: `REQUEST CHANGES: 修正が必要です`)。
+
 ## Recipe form (FR-001..007, FR-020..023)
 
 `/recipes/new` and `/recipes/<id>/edit` (`RecipeForm.svelte`) are for Members: signed out redirects to `/login`, and `/edit` answers 403 for someone else's Recipe and 404 for a missing one. The form posts through the typed client (`POST /api/recipes`, `PUT /api/recipes/:id`) and goes to `/recipes/<id>` afterwards.
