@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
 import { validator } from 'hono/validator';
+import { inArray, sql } from 'drizzle-orm';
 import { db } from '#lib/server/db/index.js';
+import { recipe, recipePhoto } from '#lib/server/db/schema.js';
 import { requireMember } from '#lib/server/auth/guards.js';
 import {
 	createRecipe,
@@ -72,26 +74,39 @@ function parseSearch(query: Record<string, string | string[]>): SearchParams | n
 const RECIPE_PHOTO_KEY =
 	/^(recipe\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/)(list|detail)\.webp$/;
 
-/** A deletable stored key and the other derivative next to it; nothing for any other key. */
-const withSibling = (key: string) => {
-	const m = RECIPE_PHOTO_KEY.exec(key);
-	return m ? [`${m[1]}list.webp`, `${m[1]}detail.webp`] : [];
-};
+/** The `recipe/<uuid>/` prefixes of the Recipe photo keys among `keys`; other keys are ignored. */
+const photoPrefixes = (keys: string[]) => [
+	...new Set(keys.flatMap((k) => RECIPE_PHOTO_KEY.exec(k)?.[1] ?? []))
+];
 
 /**
- * Photos no Recipe references any more. Runs after commit, so nothing here may fail the request:
- * building the store (missing R2_* env) and every delete are inside the guard.
+ * Photos no Recipe references any more, deleted as pairs: a pair (`list.webp` + `detail.webp`)
+ * goes only when neither file is still used, so a key given by one Member cannot take out the
+ * other derivative of someone else's photo. Runs after commit, so nothing here may fail the
+ * request: the reference check, building the store (missing R2_* env) and every delete are
+ * inside the guard.
  */
 async function deletePhotos(store: () => ImageStore, keys: string[]) {
-	const doomed = [...new Set(keys.flatMap(withSibling))];
-	if (doomed.length === 0) return;
+	const prefixes = photoPrefixes(keys);
+	if (prefixes.length === 0) return;
 	try {
+		const files = prefixes.flatMap((p) => [`${p}list.webp`, `${p}detail.webp`]);
+		const used = await db.execute<{ key: string }>(sql`
+			select ${recipe.mainPhotoKey} as key from ${recipe} where ${inArray(recipe.mainPhotoKey, files)}
+			union select ${recipePhoto.photoKey} from ${recipePhoto} where ${inArray(recipePhoto.photoKey, files)}`);
+		const usedKeys = new Set(used.rows.map((r) => r.key));
+		const doomed = files.filter((f) => !usedKeys.has(f) && !usedKeys.has(pairOf(f)));
 		const s = store();
 		await Promise.allSettled(doomed.map((k) => s.delete(k)));
 	} catch (e) {
 		console.error('photo cleanup failed', e);
 	}
 }
+
+const pairOf = (file: string) =>
+	file.endsWith('/list.webp')
+		? file.replace(/list\.webp$/, 'detail.webp')
+		: file.replace(/detail\.webp$/, 'list.webp');
 
 export const recipesRoute = ({ store }: { store: () => ImageStore }) =>
 	new Hono<ApiEnv>()

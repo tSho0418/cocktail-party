@@ -125,6 +125,20 @@ describe('PUT /api/recipes/:id', () => {
 		expect(store.objects.has(odd)).toBe(true);
 	});
 
+	it('keeps the other derivative of a photo another Recipe still uses', async () => {
+		const detail = photoKey();
+		const list = detail.replace('detail', 'list');
+		await put(detail);
+		await put(list);
+		await createRecipe(bob, `被害${tag}`, { mainPhotoKey: detail });
+		// Alice references only bob's list.webp, then drops it again.
+		const id = await createRecipe(alice, `攻撃${tag}`, { extraPhotoKeys: [list] });
+		const res = await call(alice, 'PUT', `/recipes/${id}`, recipeBody(`攻撃後${tag}`));
+		expect(res.status).toBe(200);
+		expect(store.objects.has(detail)).toBe(true);
+		expect(store.objects.has(list)).toBe(true);
+	});
+
 	it('does not fail a committed write when storage cannot be reached', async () => {
 		const broken = createApp({
 			store: () => {
