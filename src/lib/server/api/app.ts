@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { defaultStore, photosRoute } from './photos';
 import { ingredientsRoute } from './ingredients';
 import { recipesRoute } from './recipes';
+import { socialRoute } from './social';
 import type { ApiEnv } from './http';
 import { authorizePhotoUpload, requireMember } from '#lib/server/auth/guards.js';
 import type { ImageStore } from '#lib/server/services/images/index.js';
@@ -14,6 +15,7 @@ export const createApp = ({ store = defaultStore }: { store?: () => ImageStore }
 		.route('/photos', photosRoute({ authorize: authorizePhotoUpload, store }))
 		.route('/recipes', recipesRoute({ store }))
 		.route('/ingredients', ingredientsRoute())
+		.route('/', socialRoute())
 		.get('/me', requireMember, (c) => c.json(c.env.locals.member));
 
 export const app = createApp();
