@@ -78,6 +78,12 @@ Better Auth runs inside the app (ADR 0005); its endpoints are under `/api/auth/*
 
 The db tests drive Better Auth's real sign-in and callback for LINE with the token endpoint stubbed. Real Google/LINE logins have not been tried.
 
+## Age Gate (FR-060..062)
+
+The root layout shows a modal asking the visitor to declare they are 20+ until the `age_gate_consent` cookie exists. `+layout.server.ts` reads the cookie; the "yes" button posts to `POST /age-gate` (`src/routes/age-gate/+server.ts`), which sets the cookie for 30 days (HttpOnly, SameSite=Lax) and redirects back to a same-origin path. "No" is a link to `?age-gate=declined`, which swaps the question for a "not available under 20" message; no cookie is set. Cookie name, lifetime and the helpers are in `src/lib/age-gate.ts`; the gate itself is `AgeGate.svelte`.
+
+The page is always server-rendered (FR-062): while the gate is open its container is only `inert` (which also keeps keyboard focus inside the dialog) and covered by the overlay, and `<html>` stops scrolling. The gate works without JavaScript. Playwright runs every spec with the consent cookie set (`playwright.config.ts`); `e2e/age-gate.e2e.ts` clears it.
+
 ## Branches, CI and deploy
 
 Work on a branch off `develop` and open a PR into `develop`; link the issue with `Closes #N`. Merging needs the CI workflow green (`check`, `lint`, `test`, `build`, `test:db`).
