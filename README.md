@@ -44,3 +44,13 @@ The first migration enables `pg_trgm` by a line added by hand to `drizzle/0000_i
 The DB client (`#lib/server/db`) uses node-postgres. Locally it talks to the compose Postgres; in production set `DATABASE_URL` to Neon's pooled connection string (`-pooler` host, `sslmode=require`).
 
 The test database is created by the compose init script only when the volume is first created; on an older volume run `pnpm db:reset`.
+
+## Photos (ADR 0003)
+
+`PhotoPicker.svelte` shrinks a selected photo (JPEG/PNG/WebP, up to 10MB) below 4.5MB in the browser; `POST /api/photos?kind=recipe|member` takes the raw bytes as `application/octet-stream`, and `storePhoto` re-encodes them with `sharp` into two metadata-free WebP files (`<kind>/<id>/list.webp` 480px, `detail.webp` 1600px) in R2. The original is never stored. The route denies everything (401) until auth passes an `authorize` middleware to `photosRoute()` in `app.ts`. R2 is configured by the `R2_*` variables in `.env.example`, read on the first upload. `/dev/photo-picker` is the e2e harness page (uploads nothing).
+
+### Known limits
+
+- Browser downsizing is tested only on desktop Chromium (`e2e/photo.e2e.ts`). Untested: iOS Safari HEIC handling (expected to arrive as JPEG via `accept`, else rejected as an unsupported format), iOS canvas memory caps with 48MP/panorama photos, `imageOrientation: 'from-image'` on Safari ≤16.4 and old Android WebViews, Android Chrome's Google Photos picker (`file.type`, cloud-only photos), and downsizing speed on low-end phones.
+- `sharp` loading in the Vercel function runtime is not verified. The local build bundles `@img/sharp-linux-x64`; deploy once to a Preview and hit `/api/photos` before relying on it.
+- The R2 store is unit-tested for request construction only (no credentials in CI); it has not talked to a real bucket.
