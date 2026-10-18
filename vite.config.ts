@@ -11,6 +11,9 @@ if (process.env.VITEST_DB) {
 		loadEnv('test', process.cwd(), '').DATABASE_URL_TEST ??
 		'postgres://postgres:postgres@localhost:5432/cocktail_party_test';
 	process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
+	// Dummy OAuth apps: the auth db tests stub the provider's token endpoint.
+	process.env.LINE_CLIENT_ID = 'test-line';
+	process.env.LINE_CLIENT_SECRET = 'test-line-secret';
 }
 
 export default defineConfig({

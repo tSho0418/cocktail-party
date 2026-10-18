@@ -4,8 +4,10 @@ declare global {
 	namespace App {
 		// interface Error {}
 		// Filled by the auth handle (see src/hooks.server.ts); also passed to Hono as c.env.locals.
-		// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-		interface Locals {}
+		interface Locals {
+			/** Null when signed out or suspended (FR-075). */
+			member: import('#lib/server/auth/index.js').Member | null;
+		}
 		// interface PageData {}
 		// interface PageState {}
 		// interface Platform {}
