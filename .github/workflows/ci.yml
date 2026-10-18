@@ -67,6 +67,22 @@ jobs:
     # Only gates main: PRs targeting main, and the deploy workflow's own run.
     if: ${{ inputs.e2e || github.base_ref == 'main' }}
     runs-on: ubuntu-latest
+    # The top page and Recipe detail read the database.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -75,6 +91,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm db:migrate
       - run: pnpm exec playwright install --with-deps chromium
       # playwright.config.ts builds and serves the app itself (E2E_HARNESS=1).
       - run: pnpm test:e2e
