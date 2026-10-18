@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { call, seedMember, type TestMember } from './test-helpers';
+import { call, seedMember, uploadPhoto, type TestMember } from './test-helpers';
 
 let alice: TestMember;
 let bob: TestMember;
@@ -26,7 +26,7 @@ beforeAll(async () => {
 	).id;
 	const res = await call(alice, 'POST', '/recipes', {
 		title: `レシピ${tag}`,
-		mainPhotoKey: `recipe/${randomUUID()}/list.webp`,
+		mainPhotoKey: (await uploadPhoto(alice)).list,
 		ingredients: [{ ingredientId: gin, mixRatio: 3 }],
 		steps: ['注ぐ']
 	});
