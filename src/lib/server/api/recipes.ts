@@ -1,8 +1,6 @@
 import { Hono } from 'hono';
 import { validator } from 'hono/validator';
-import { inArray, sql } from 'drizzle-orm';
 import { db } from '#lib/server/db/index.js';
-import { recipe, recipePhoto } from '#lib/server/db/schema.js';
 import { requireMember } from '#lib/server/auth/guards.js';
 import {
 	createRecipe,
@@ -14,7 +12,15 @@ import {
 	type SearchParams
 } from '#lib/server/services/recipes/index.js';
 import type { ImageStore } from '#lib/server/services/images/index.js';
-import { actorOf, firstValues, invalidRequest, isRecord, statusOf, type ApiEnv } from './http';
+import {
+	actorOf,
+	firstValues,
+	invalidRequest,
+	isRecord,
+	jsonBodyLimit,
+	statusOf,
+	type ApiEnv
+} from './http';
 
 const isStringArray = (v: unknown): v is string[] =>
 	Array.isArray(v) && v.every((s) => typeof s === 'string');
@@ -69,44 +75,22 @@ function parseSearch(query: Record<string, string | string[]>): SearchParams | n
 	};
 }
 
-// Keys come from the Member's own request (upload keys are not bound to the uploader), so only
-// ever delete what storePhoto produces for a Recipe photo; never a Member icon or any other path.
-const RECIPE_PHOTO_KEY =
-	/^(recipe\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/)(list|detail)\.webp$/;
-
-/** The `recipe/<uuid>/` prefixes of the Recipe photo keys among `keys`; other keys are ignored. */
-const photoPrefixes = (keys: string[]) => [
-	...new Set(keys.flatMap((k) => RECIPE_PHOTO_KEY.exec(k)?.[1] ?? []))
-];
-
 /**
- * Photos no Recipe references any more, deleted as pairs: a pair (`list.webp` + `detail.webp`)
- * goes only when neither file is still used, so a key given by one Member cannot take out the
- * other derivative of someone else's photo. Runs after commit, so nothing here may fail the
- * request: the reference check, building the store (missing R2_* env) and every delete are
- * inside the guard.
+ * Deletes the objects of photos whose uploads were released in the write's transaction (nothing
+ * can reference them any more). Best effort: the write is committed, so building the store
+ * (missing R2_* env) or any delete failing must not fail the request.
  */
-async function deletePhotos(store: () => ImageStore, keys: string[]) {
-	const prefixes = photoPrefixes(keys);
-	if (prefixes.length === 0) return;
+async function deleteObjects(store: () => ImageStore, keys: string[]) {
+	if (keys.length === 0) return;
 	try {
-		const files = prefixes.flatMap((p) => [`${p}list.webp`, `${p}detail.webp`]);
-		const used = await db.execute<{ key: string }>(sql`
-			select ${recipe.mainPhotoKey} as key from ${recipe} where ${inArray(recipe.mainPhotoKey, files)}
-			union select ${recipePhoto.photoKey} from ${recipePhoto} where ${inArray(recipePhoto.photoKey, files)}`);
-		const usedKeys = new Set(used.rows.map((r) => r.key));
-		const doomed = files.filter((f) => !usedKeys.has(f) && !usedKeys.has(pairOf(f)));
 		const s = store();
-		await Promise.allSettled(doomed.map((k) => s.delete(k)));
+		const results = await Promise.allSettled(keys.map((k) => s.delete(k)));
+		for (const r of results)
+			if (r.status === 'rejected') console.error('photo cleanup failed', r.reason);
 	} catch (e) {
 		console.error('photo cleanup failed', e);
 	}
 }
-
-const pairOf = (file: string) =>
-	file.endsWith('/list.webp')
-		? file.replace(/list\.webp$/, 'detail.webp')
-		: file.replace(/detail\.webp$/, 'list.webp');
 
 export const recipesRoute = ({ store }: { store: () => ImageStore }) =>
 	new Hono<ApiEnv>()
@@ -128,6 +112,7 @@ export const recipesRoute = ({ store }: { store: () => ImageStore }) =>
 		.post(
 			'/',
 			requireMember,
+			jsonBodyLimit,
 			validator('json', (b, c) => parseRecipeBody(b) ?? invalidRequest(c)),
 			async (c) => {
 				const result = await createRecipe(db, actorOf(c), c.req.valid('json'));
@@ -138,18 +123,19 @@ export const recipesRoute = ({ store }: { store: () => ImageStore }) =>
 		.put(
 			'/:id',
 			requireMember,
+			jsonBodyLimit,
 			validator('json', (b, c) => parseRecipeBody(b) ?? invalidRequest(c)),
 			async (c) => {
 				const result = await updateRecipe(db, actorOf(c), c.req.param('id'), c.req.valid('json'));
 				if (!result.ok) return c.json({ error: result.error }, statusOf(result.error));
 				const { removedPhotoKeys, ...rest } = result.value;
-				await deletePhotos(store, removedPhotoKeys);
+				await deleteObjects(store, removedPhotoKeys);
 				return c.json(rest);
 			}
 		)
 		.delete('/:id', requireMember, async (c) => {
 			const result = await deleteRecipe(db, actorOf(c), c.req.param('id'));
 			if (!result.ok) return c.json({ error: result.error }, statusOf(result.error));
-			await deletePhotos(store, result.value.photoKeys);
+			await deleteObjects(store, result.value.photoKeys);
 			return c.body(null, 204);
 		});

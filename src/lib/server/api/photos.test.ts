@@ -9,15 +9,33 @@ const allow: MiddlewareHandler = (_c, next) => next();
 
 function setup(authorize: MiddlewareHandler = allow) {
 	const store = memoryImageStore();
-	const api = new Hono().route('/photos', photosRoute({ authorize, store: () => store }));
+	const recorded: { memberId: string; kind: string; id: string }[] = [];
+	let failRecord = false;
+	const record = async (memberId: string, kind: string, id: string) => {
+		if (failRecord) throw new Error('db down');
+		recorded.push({ memberId, kind, id });
+	};
+	const api = new Hono().route('/photos', photosRoute({ authorize, store: () => store, record }));
+	const member = { id: 'member-1', username: 'm', isAdministrator: false };
 	const post = (body: BodyInit, headers: Record<string, string> = {}, query = '') =>
-		api.request(`/photos${query}`, {
-			method: 'POST',
-			body,
-			...({ duplex: 'half' } as RequestInit), // undici needs it for a stream body; not in the DOM type
-			headers: { 'content-type': 'application/octet-stream', ...headers }
-		});
-	return { store, post };
+		api.request(
+			`/photos${query}`,
+			{
+				method: 'POST',
+				body,
+				...({ duplex: 'half' } as RequestInit), // undici needs it for a stream body; not in the DOM type
+				headers: { 'content-type': 'application/octet-stream', ...headers }
+			},
+			{ locals: { member } }
+		);
+	return {
+		store,
+		post,
+		recorded,
+		failRecording: () => {
+			failRecord = true;
+		}
+	};
 }
 
 describe('POST /api/photos', () => {
@@ -31,12 +49,23 @@ describe('POST /api/photos', () => {
 	});
 
 	it('stores the two derivatives and returns their keys', async () => {
-		const { store, post } = setup();
+		const { store, post, recorded } = setup();
 		const res = await post(new Uint8Array(await jpegWithGps()), {}, '?kind=member');
 		expect(res.status).toBe(201);
 		const { keys } = await res.json();
 		expect(keys.list).toMatch(/^member\/.+\/list\.webp$/);
 		expect([...store.objects.keys()].sort()).toEqual([keys.detail, keys.list]);
+		// Recorded against the signed-in Member, so only they can attach it to a Recipe.
+		expect(recorded).toEqual([
+			{ memberId: 'member-1', kind: 'member', id: keys.list.split('/')[1] }
+		]);
+	});
+
+	it('removes the objects again when the upload cannot be recorded', async () => {
+		const { store, post, failRecording } = setup();
+		failRecording();
+		await expect(post(new Uint8Array(await jpegWithGps()))).resolves.toMatchObject({ status: 500 });
+		expect(store.objects.size).toBe(0);
 	});
 
 	it('runs authorize before reading the body', async () => {

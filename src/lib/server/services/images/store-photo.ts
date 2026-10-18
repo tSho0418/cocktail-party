@@ -6,7 +6,8 @@ export type OwnerKind = 'recipe' | 'member';
 
 export type PhotoKeys = { list: string; detail: string };
 
-export type StorePhotoResult = { ok: true; keys: PhotoKeys } | { ok: false; error: ProcessError };
+export type StorePhotoResult =
+	{ ok: true; id: string; keys: PhotoKeys } | { ok: false; error: ProcessError };
 
 /** Re-encodes and stores only the two derivatives; the original bytes are never written (ADR 0003). */
 export async function storePhoto(
@@ -29,5 +30,5 @@ export async function storePhoto(
 		await Promise.allSettled([store.delete(keys.list), store.delete(keys.detail)]);
 		throw e;
 	}
-	return { ok: true, keys };
+	return { ok: true, id, keys };
 }

@@ -12,6 +12,7 @@ import {
 	recipeStep,
 	report
 } from '#lib/server/db/schema.js';
+import { lockPhotos, recipePhotoId, releaseUnreferenced } from './photos';
 import {
 	recomputeDerived,
 	resolveEffectiveAbv,
@@ -83,6 +84,8 @@ function validateRecipeInput(input: RecipeInput): Result<Required<RecipeInput>, 
 	if (!isKey(input.mainPhotoKey)) return fail('main_photo_required');
 	if (extraPhotoKeys.length > 3) return fail('too_many_photos');
 	if (!extraPhotoKeys.every(isKey)) return fail('photo_key_invalid');
+	if (![input.mainPhotoKey, ...extraPhotoKeys].every((k) => recipePhotoId(k) !== null))
+		return fail('photo_key_invalid');
 	if (steps.length < 1 || steps.length > 10) return fail('steps_invalid');
 	if (steps.some((s) => s.length === 0 || charLength(s) > 200)) return fail('steps_invalid');
 	const valid = validateRecipeIngredients(ingredients.map((i) => ({ ...i, id: i.ingredientId })));
@@ -189,6 +192,9 @@ export async function createRecipe(
 	const v = validateRecipeInput(input);
 	if (!v.ok) return v;
 	return db.transaction(async (tx) => {
+		const keys = [v.value.mainPhotoKey, ...v.value.extraPhotoKeys];
+		if (!(await lockPhotos(tx, keys)).ownedBy(actor.memberId, keys))
+			return fail('photo_key_invalid');
 		const ings = await loadIngredients(tx, v.value.ingredients);
 		if (!ings.ok) return ings;
 		const derived = recomputeDerived(ings.value);
@@ -233,24 +239,12 @@ async function photoKeys(tx: Db, recipeId: string, mainPhotoKey: string) {
 }
 
 /**
- * Keys no Recipe references any more, so deleting the objects cannot break another Recipe
- * that was given someone else's key. shortcut: keys are not bound to their uploader; an
- * upload-ownership record would let input validation reject foreign keys outright.
- */
-async function unreferenced(tx: Db, keys: string[]) {
-	if (keys.length === 0) return [];
-	const used = await tx.execute<{ key: string }>(sql`
-		select ${recipe.mainPhotoKey} as key from ${recipe} where ${inArray(recipe.mainPhotoKey, keys)}
-		union select ${recipePhoto.photoKey} from ${recipePhoto} where ${inArray(recipePhoto.photoKey, keys)}`);
-	const usedKeys = new Set(used.rows.map((r) => r.key));
-	return [...new Set(keys)].filter((k) => !usedKeys.has(k));
-}
-
-/**
  * FR-008: the owner replaces the whole Recipe. The stored override is kept while it stays in
  * range (FR-015/023) unless `resetOverride` (the "recompute" button) or an explicit
- * `abvOverride` (number to set, null to clear) is given. `removedPhotoKeys` are no longer
- * referenced; the caller deletes them from object storage after commit.
+ * `abvOverride` (number to set, null to clear) is given. Photo keys must be uploads of the
+ * actor. `removedPhotoKeys` are no longer referenced and their uploads are released in the
+ * same transaction (nothing can attach them again); the caller deletes the objects from
+ * storage after commit.
  */
 export async function updateRecipe(
 	db: Db,
@@ -268,6 +262,17 @@ export async function updateRecipe(
 		const cur = await lockRecipe(tx, actor, recipeId);
 		if (!cur.ok) return cur;
 		if (!v.ok) return v;
+		const before = await photoKeys(tx, recipeId, cur.value.mainPhotoKey);
+		const keys = [v.value.mainPhotoKey, ...v.value.extraPhotoKeys];
+		// One locking pass over old and new photos, so attaching and releasing serialise per photo.
+		const photos = await lockPhotos(tx, [...before, ...keys]);
+		if (
+			!photos.ownedBy(
+				actor.memberId,
+				keys.filter((k) => !before.includes(k))
+			)
+		)
+			return fail('photo_key_invalid');
 		const ings = await loadIngredients(tx, v.value.ingredients);
 		if (!ings.ok) return ings;
 		const explicit = input.resetOverride || input.abvOverride !== undefined;
@@ -278,12 +283,11 @@ export async function updateRecipe(
 			if (!o.ok) return o;
 			override = o.value;
 		}
-		const before = await photoKeys(tx, recipeId, cur.value.mainPhotoKey);
 		await writeRecipe(tx, recipeId, actor.memberId, v.value, ings.value, derived, override);
 		return ok({
 			id: recipeId,
 			overrideDiscarded: derived.overrideDiscarded,
-			removedPhotoKeys: await unreferenced(tx, before)
+			removedPhotoKeys: await releaseUnreferenced(tx, photos.ids)
 		});
 	});
 }
@@ -332,7 +336,8 @@ export async function clearAbvOverride(
 
 /**
  * FR-008/074: owner or Administrator. Likes, Saves, steps and photos cascade; Reports stay with
- * target_state 'recipe_deleted'. Returns the now-unreferenced photo keys for the caller to delete.
+ * target_state 'recipe_deleted'. Releases the now-unreferenced photo uploads and returns their keys
+ * for the caller to delete from storage after commit.
  */
 export async function deleteRecipe(
 	db: Db,
@@ -347,8 +352,9 @@ export async function deleteRecipe(
 			.update(report)
 			.set({ targetState: 'recipe_deleted' })
 			.where(eq(report.recipeId, recipeId));
+		const photos = await lockPhotos(tx, keys);
 		await tx.delete(recipe).where(eq(recipe.id, recipeId));
-		return ok({ photoKeys: await unreferenced(tx, keys) });
+		return ok({ photoKeys: await releaseUnreferenced(tx, photos.ids) });
 	});
 }
 

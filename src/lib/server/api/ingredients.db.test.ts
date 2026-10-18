@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { MAX_NAME_LENGTH } from '#lib/server/services/ingredients/name.js';
+import { MAX_JSON_BYTES } from './http';
 import { call, seedMember, type TestMember } from './test-helpers';
 
 let admin: TestMember;
@@ -72,6 +74,32 @@ describe('GET /api/ingredients/suggest', () => {
 
 	it('400 without a name', async () => {
 		expect((await call(null, 'GET', '/ingredients/suggest')).status).toBe(400);
+	});
+
+	it('caps the name at twice the Ingredient name limit, counted in characters (#11)', async () => {
+		const suggest = (name: string) =>
+			call(null, 'GET', `/ingredients/suggest?name=${encodeURIComponent(name)}`);
+		expect((await suggest('あ'.repeat(MAX_NAME_LENGTH * 2))).status).toBe(200);
+		expect((await suggest('あ'.repeat(MAX_NAME_LENGTH * 2 + 1))).status).toBe(400);
+		expect((await suggest('🍸'.repeat(MAX_NAME_LENGTH * 2))).status).toBe(200);
+	});
+});
+
+describe('JSON body limit (#11)', () => {
+	it('413 for POST and PATCH bodies over the limit', async () => {
+		const padding = 'a'.repeat(MAX_JSON_BYTES);
+		const post = await call(alice, 'POST', '/ingredients', {
+			name: `big${tag}`,
+			abvPercent: 0,
+			padding
+		});
+		expect(post.status).toBe(413);
+		expect(await post.json()).toEqual({ error: 'too_large' });
+		const patch = await call(admin, 'PATCH', `/ingredients/${randomUUID()}/abv`, {
+			abvPercent: 1,
+			padding
+		});
+		expect(patch.status).toBe(413);
 	});
 });
 

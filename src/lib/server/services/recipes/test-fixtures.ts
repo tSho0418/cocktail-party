@@ -1,7 +1,9 @@
 // Shared by the *.db.test.ts files in this directory; never imported by app code.
 import { sql, TransactionRollbackError } from 'drizzle-orm';
 import { db } from '#lib/server/db/index.js';
-import { ingredient, member } from '#lib/server/db/schema.js';
+import { randomUUID } from 'node:crypto';
+import { ingredient, member, photoUpload } from '#lib/server/db/schema.js';
+import { recordPhotoUpload } from './photos';
 import { createRecipe, type Actor, type Db, type RecipeInput } from './recipes';
 
 /**
@@ -63,6 +65,16 @@ export async function seedIngredients(tx: Db) {
 	};
 }
 
+/** A well-formed Recipe photo key (storePhoto's shape) with a fresh upload id. */
+export const photoKey = (file: 'list' | 'detail' = 'list') => `recipe/${randomUUID()}/${file}.webp`;
+
+/** Records an upload by `actor` and returns its list key (add `.replace('list', 'detail')` for the other file). */
+export async function upload(tx: Db, actor: Actor) {
+	const key = photoKey();
+	await recordPhotoUpload(tx, actor.memberId, 'recipe', key.split('/')[1]);
+	return key;
+}
+
 export const input = (
 	title: string,
 	ingredients: [string, number][],
@@ -70,15 +82,25 @@ export const input = (
 ): RecipeInput => ({
 	title,
 	description: '',
-	mainPhotoKey: `photos/${title}/main`,
+	mainPhotoKey: photoKey(),
 	ingredients: ingredients.map(([ingredientId, mixRatio]) => ({ ingredientId, mixRatio })),
 	steps: ['氷を入れたグラスに注ぐ', '軽く混ぜる'],
 	...extra
 });
 
+/** `recipeInput` after recording its photos as uploads of `actor`, as POST /api/photos would have. */
+export async function own<T extends RecipeInput>(tx: Db, actor: Actor, recipeInput: T) {
+	for (const key of [recipeInput.mainPhotoKey, ...(recipeInput.extraPhotoKeys ?? [])])
+		await tx
+			.insert(photoUpload)
+			.values({ id: key.split('/')[1], memberId: actor.memberId, kind: 'recipe' })
+			.onConflictDoNothing();
+	return recipeInput;
+}
+
 /** createRecipe that must succeed; returns the new id. */
 export async function make(tx: Db, actor: Actor, recipeInput: RecipeInput) {
-	const r = await createRecipe(tx, actor, recipeInput);
+	const r = await createRecipe(tx, actor, await own(tx, actor, recipeInput));
 	if (!r.ok) throw new Error(`fixture createRecipe failed: ${r.error}`);
 	return r.value.id;
 }

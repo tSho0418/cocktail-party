@@ -227,7 +227,7 @@ describe('profile (FR-054)', () => {
 				{
 					id: r,
 					title: 'ジントニック',
-					mainPhotoKey: 'photos/ジントニック/main',
+					mainPhotoKey: expect.stringMatching(/^recipe\/.+\/list\.webp$/),
 					ownerUsername: 'alice',
 					likeCount: 1
 				}

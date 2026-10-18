@@ -1,4 +1,5 @@
 import type { Context } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from 'hono';
 
@@ -29,3 +30,12 @@ export const invalidRequest = (c: Context<Env>) =>
 /** Query values as plain strings; a repeated parameter keeps its first value. */
 export const firstValues = (q: Record<string, string | string[]>) =>
 	Object.fromEntries(Object.entries(q).map(([k, v]) => [k, typeof v === 'string' ? v : v[0]]));
+
+/** Largest JSON body the Recipe/Ingredient routes read (a full Recipe is well under 25KB). */
+export const MAX_JSON_BYTES = 64 * 1024;
+
+/** Rejects on Content-Length before reading, and counts streamed bytes when it is absent. */
+export const jsonBodyLimit = bodyLimit({
+	maxSize: MAX_JSON_BYTES,
+	onError: (c) => c.json({ error: 'too_large' as const }, 413)
+});

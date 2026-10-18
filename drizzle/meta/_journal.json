@@ -15,6 +15,13 @@
       "when": 1792312190609,
       "tag": "0001_better_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792342470789,
+      "tag": "0002_photo_upload",
+      "breakpoints": true
     }
   ]
 }
