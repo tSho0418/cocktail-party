@@ -2,15 +2,12 @@ services:
   postgres:
     image: postgres:17
     ports:
-      - '5432:5432'
+      # Loopback only: the credentials below are well known.
+      - '127.0.0.1:5432:5432'
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: cocktail_party
-    configs:
-      # Runs only on first start (empty volume): a second database for `pnpm test:db`.
-      - source: create-test-db
-        target: /docker-entrypoint-initdb.d/create-test-db.sql
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -18,10 +15,6 @@ services:
       interval: 2s
       timeout: 5s
       retries: 15
-
-configs:
-  create-test-db:
-    content: CREATE DATABASE cocktail_party_test;
 
 volumes:
   pgdata:

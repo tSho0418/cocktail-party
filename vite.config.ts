@@ -3,14 +3,20 @@ import { defineConfig } from 'vitest/config';
 import adapter from '@sveltejs/adapter-vercel';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { loadEnv } from 'vite';
+import { randomBytes } from 'node:crypto';
 
-// `pnpm test:db`: SvelteKit snapshots env when this config loads, so point the app's `db`
-// (DATABASE_URL) at the test database here; the db project's global setup wipes and migrates it.
+// `pnpm test:db`: every run gets its own database on the DATABASE_URL_TEST server, so concurrent
+// runs (other worktrees) never collide; the db project's global setup creates, migrates and drops it.
+// SvelteKit snapshots env when this config loads, so the app's `db` (DATABASE_URL) is pointed here.
+// `??=` keeps one name when the config is evaluated again (projects `extends` it).
 if (process.env.VITEST_DB) {
 	process.env.DATABASE_URL_TEST ??=
 		loadEnv('test', process.cwd(), '').DATABASE_URL_TEST ??
-		'postgres://postgres:postgres@localhost:5432/cocktail_party_test';
-	process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
+		'postgres://postgres:postgres@localhost:5432/postgres';
+	process.env.TEST_DATABASE_NAME ??= `cocktail_party_test_${randomBytes(4).toString('hex')}`;
+	const url = new URL(process.env.DATABASE_URL_TEST);
+	url.pathname = `/${process.env.TEST_DATABASE_NAME}`;
+	process.env.DATABASE_URL = url.href;
 }
 
 export default defineConfig({
