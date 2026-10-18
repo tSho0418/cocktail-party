@@ -20,10 +20,16 @@
 		error = undefined;
 		if (!file) return;
 		busy = true;
-		const result = await downsizeImage(file);
-		busy = false;
-		if (result.ok) onselect(result.blob);
-		else error = MESSAGES[result.error];
+		try {
+			const result = await downsizeImage(file);
+			if (result.ok) onselect(result.blob);
+			else error = MESSAGES[result.error];
+		} catch {
+			// e.g. canvas out of memory on iOS; never leave the input disabled.
+			error = MESSAGES.undecodable;
+		} finally {
+			busy = false;
+		}
 	}
 </script>
 
@@ -36,6 +42,7 @@
 	aria-describedby={error ? `${id}-error` : undefined}
 	{onchange}
 />
+<p role="status" aria-live="polite">{busy ? '縮小しています…' : ''}</p>
 {#if error}
 	<p id="{id}-error" role="alert" class="text-red-700">{error}</p>
 {/if}

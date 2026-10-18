@@ -26,7 +26,12 @@ export async function downsizeImage(file: File): Promise<DownsizeResult> {
 			const canvas = document.createElement('canvas');
 			canvas.width = Math.round(bitmap.width * scale);
 			canvas.height = Math.round(bitmap.height * scale);
-			canvas.getContext('2d')?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+			const ctx = canvas.getContext('2d');
+			if (!ctx) return { ok: false, error: 'undecodable' }; // else toBlob makes a blank JPEG
+			// JPEG has no alpha: paint white first, or transparent areas encode as black.
+			ctx.fillStyle = '#fff';
+			ctx.fillRect(0, 0, canvas.width, canvas.height);
+			ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
 			// JPEG: the only lossy type every browser's toBlob encodes (older Safari can't make WebP).
 			const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/jpeg', 0.85));
 			canvas.width = canvas.height = 0; // release canvas memory early (matters on iOS)

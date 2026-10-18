@@ -13,11 +13,12 @@ export const LATITUDE_BYTES = Buffer.from(new Uint32Array(LATITUDE.flat()).buffe
 /** Stored (raw) pixels are landscape with a red block at top-left; the rest is blue. */
 export function rawLandscape({ width, height, noise = false }: Size & { noise?: boolean }) {
 	const px = Buffer.alloc(width * height * 3);
+	const random = seeded(1);
 	for (let i = 0; i < width * height; i++) {
 		const x = i % width;
 		const y = (i / width) | 0;
 		const red = x < width / 4 && y < height / 4;
-		const n = noise ? (Math.random() * 60) | 0 : 0;
+		const n = noise ? (random() * 60) | 0 : 0;
 		px[i * 3] = red ? 255 - n : n;
 		px[i * 3 + 1] = n;
 		px[i * 3 + 2] = red ? n : 255 - n;
@@ -26,6 +27,29 @@ export function rawLandscape({ width, height, noise = false }: Size & { noise?: 
 }
 
 type Size = { width: number; height: number };
+
+/** mulberry32: deterministic noise so fixture sizes are the same on every run. */
+function seeded(seed: number) {
+	return () => {
+		seed = (seed + 0x6d2b79f5) | 0;
+		let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+}
+
+/** PNG of seeded RGBA noise whose left half is fully transparent; big enough to need downsizing. */
+export function transparentPng({ width, height }: Size) {
+	const random = seeded(2);
+	const px = Buffer.alloc(width * height * 4);
+	for (let i = 0; i < width * height; i++) {
+		for (let c = 0; c < 3; c++) px[i * 4 + c] = (random() * 256) | 0;
+		px[i * 4 + 3] = i % width < width / 2 ? 0 : 255;
+	}
+	return sharp(px, { raw: { width, height, channels: 4 } })
+		.png()
+		.toBuffer();
+}
 
 // Minimal little-endian TIFF/EXIF: IFD0 {Make, Orientation, GPS pointer} -> GPS IFD {LatitudeRef, Latitude}.
 // Hand-built because sharp's withExif() cannot write the GPS IFD.

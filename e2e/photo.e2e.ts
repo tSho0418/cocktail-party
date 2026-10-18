@@ -1,7 +1,22 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import sharp from 'sharp';
 import { processUpload } from '../src/lib/server/services/images/process';
-import { bigJpeg, isRedAt } from '../src/lib/server/services/images/test-fixtures';
+import { bigJpeg, isRedAt, transparentPng } from '../src/lib/server/services/images/test-fixtures';
+
+const pngFile = async () => {
+	const buffer = await transparentPng({ width: 1400, height: 1400 });
+	expect(buffer.length).toBeGreaterThan(4_500_000);
+	return { name: 'clear.png', mimeType: 'image/png', buffer };
+};
+
+async function pickedBytes(page: Page) {
+	const src = await page.getByRole('img', { name: '選んだ写真' }).getAttribute('src');
+	const bytes = await page.evaluate(
+		async (url) => [...new Uint8Array(await (await fetch(url)).arrayBuffer())],
+		src!
+	);
+	return Buffer.from(bytes);
+}
 
 // Chromium only; iOS Safari / Android Chrome behaviour is listed under "Known limits" in the README.
 test.describe('PhotoPicker', () => {
@@ -29,12 +44,7 @@ test.describe('PhotoPicker', () => {
 		await expect(output).toHaveAttribute('data-type', 'image/jpeg', { timeout: 30_000 });
 		expect(Number(await output.getAttribute('data-size'))).toBeLessThan(4_500_000);
 
-		const src = await page.getByRole('img', { name: '選んだ写真' }).getAttribute('src');
-		const bytes = await page.evaluate(
-			async (url) => [...new Uint8Array(await (await fetch(url)).arrayBuffer())],
-			src!
-		);
-		const blob = Buffer.from(bytes);
+		const blob = await pickedBytes(page);
 		const meta = await sharp(blob).metadata();
 		expect(meta.orientation ?? 1).toBe(1);
 		expect(meta.height).toBeGreaterThan(meta.width);
@@ -42,6 +52,50 @@ test.describe('PhotoPicker', () => {
 
 		const result = await processUpload(blob);
 		expect(result.ok && [result.list.height, result.detail.height]).toEqual([480, 1600]);
+	});
+
+	test('>4.5MB transparent PNG -> JPEG with a white (not black) background', async ({ page }) => {
+		await page.goto('/dev/photo-picker');
+		await page.getByLabel('写真を選ぶ').setInputFiles(await pngFile());
+		await expect(page.locator('output')).toHaveAttribute('data-type', 'image/jpeg', {
+			timeout: 30_000
+		});
+		// Left half of the source is fully transparent. (stats() ignores extract(), so crop first.)
+		const jpeg = await pickedBytes(page);
+		const { width, height } = await sharp(jpeg).metadata();
+		const left = await sharp(jpeg)
+			.extract({ left: 0, top: 0, width: Math.floor(width * 0.4), height })
+			.toBuffer();
+		const { channels } = await sharp(left).stats();
+		for (const c of channels.slice(0, 3)) expect(c.mean).toBeGreaterThan(245);
+	});
+
+	test('shows a busy status, and recovers with a message if shrinking throws', async ({ page }) => {
+		await page.addInitScript(() => {
+			const w = window as unknown as { release: () => void };
+			const decode = window.createImageBitmap.bind(window);
+			// Hold decoding until the test releases it, then fail like an iOS canvas OOM.
+			window.createImageBitmap = (async (...args: Parameters<typeof decode>) => {
+				await new Promise<void>((r) => (w.release = r));
+				return decode(...args);
+			}) as typeof createImageBitmap;
+			HTMLCanvasElement.prototype.toBlob = () => {
+				throw new Error('out of memory');
+			};
+		});
+		await page.goto('/dev/photo-picker');
+		const input = page.getByLabel('写真を選ぶ');
+		await input.setInputFiles(await pngFile());
+
+		await expect(page.getByRole('status')).toHaveText('縮小しています…');
+		await expect(input).toBeDisabled();
+		await page.evaluate(() => (window as unknown as { release: () => void }).release());
+
+		await expect(page.getByRole('alert')).toHaveText(
+			'この画像は読み込めませんでした。別の画像を選んでください。'
+		);
+		await expect(page.getByRole('status')).toHaveText('');
+		await expect(input).toBeEnabled();
 	});
 
 	test('rejects non-image types and >10MB at selection, in Japanese', async ({ page }) => {
