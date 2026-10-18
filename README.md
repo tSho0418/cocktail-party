@@ -11,6 +11,7 @@ SvelteKit (SSR, adapter-vercel) + Tailwind CSS, Hono API mounted at `/api/*` via
 | `src/lib/server/api/app.ts`   | Hono app (`/api/*`). Thin routes only.                     |
 | `src/lib/api.ts`              | Typed Hono client (`createApiClient(fetch)`).              |
 | `src/lib/server/services/`    | Business logic, shared by load functions and Hono routes.  |
+| `src/lib/domain/alcohol/`     | Alcohol Content rules (pure); also run in the browser.     |
 | `src/lib/server/db/schema.ts` | Full data model. Migrations in `drizzle/`.                 |
 | `src/lib/server/auth/`        | Better Auth (Google/LINE) and Hono guards. See Auth below. |
 
@@ -126,6 +127,14 @@ Issue、PR、レビュー、コメント、コミットメッセージは日本�
 
 - PR には対応する Issue を `Closes #N` で書きます。
 - レビューは先頭行に `APPROVE` または `REQUEST CHANGES` を書き、続けて日本語で理由を書きます(例: `REQUEST CHANGES: 修正が必要です`)。
+
+## Recipe form (FR-001..007, FR-020..023)
+
+`/recipes/new` and `/recipes/<id>/edit` (`RecipeForm.svelte`) are for Members: signed out redirects to `/login`, and `/edit` answers 403 for someone else's Recipe and 404 for a missing one. The form posts through the typed client (`POST /api/recipes`, `PUT /api/recipes/:id`) and goes to `/recipes/<id>` afterwards.
+
+- **Photos:** one required Main Photo and up to 3 more, each picked with `PhotoPicker` and uploaded at once to `POST /api/photos?kind=recipe`. The form keeps and sends the `.../list.webp` key of each stored pair (`mainPhotoKey`, `extraPhotoKeys`); the detail size is the same key with `detail.webp`. A photo that is replaced or removed before saving stays in storage unreferenced.
+- **Ingredients:** `IngredientPicker.svelte` searches with `GET /api/ingredients/suggest` and shows similar names (FR-014). If no result matches the typed name exactly, "register as a 0% Ingredient" calls `POST /api/ingredients` with `abvPercent: 0` (FR-012). Alcoholic Ingredients can only come from an Administrator, so the form never offers to create one.
+- **Alcohol Content:** the form computes the auto value live with the same rules as the server (`#lib/domain/alcohol`, via `src/lib/recipe-form.ts`). With alcohol, the Member may type an override in 0 < x ≤ the highest Ingredient ABV (shown as "投稿者による修正値", with the auto value beside it); editing Ingredients keeps it, "再計算する" clears it. An override that stops fitting after an Ingredient change blocks saving until it is fixed or cleared. Without alcohol the value is fixed at 0% and any typed override is dropped. Every save sends the override the form shows (`abvOverride` number or `null`), so the stored value always matches the screen.
 
 ## Photos (ADR 0003)
 
