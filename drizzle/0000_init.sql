@@ -67,6 +67,7 @@ CREATE TABLE "recipe" (
 	CONSTRAINT "recipe_auto_abv_one_decimal" CHECK ("recipe"."auto_abv" = round("recipe"."auto_abv", 1)),
 	CONSTRAINT "recipe_abv_override_one_decimal" CHECK ("recipe"."abv_override" = round("recipe"."abv_override", 1)),
 	CONSTRAINT "recipe_non_alcoholic_zero" CHECK ("recipe"."has_alcohol" OR "recipe"."auto_abv" = 0),
+	CONSTRAINT "recipe_alcoholic_nonzero" CHECK (NOT "recipe"."has_alcohol" OR "recipe"."auto_abv" > 0),
 	CONSTRAINT "recipe_abv_override_range" CHECK ("recipe"."abv_override" IS NULL OR ("recipe"."has_alcohol" AND "recipe"."abv_override" > 0 AND "recipe"."abv_override" <= 100))
 );
 --> statement-breakpoint

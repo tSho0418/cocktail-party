@@ -93,6 +93,14 @@ describe('recipe and ingredient constraints', () => {
 		expect(await pgErrorCode(abv)).toBe(CHECK_VIOLATION);
 	});
 
+	it('rejects an alcoholic Recipe with auto_abv 0', async () => {
+		const [m] = await db.select().from(member).limit(1);
+		const zero = db
+			.insert(recipe)
+			.values({ memberId: m.id, title: 'ゼロ', mainPhotoKey: 'p', autoAbv: 0, hasAlcohol: true });
+		expect(await pgErrorCode(zero)).toBe(CHECK_VIOLATION);
+	});
+
 	it('rejects the same Ingredient twice in one Recipe', async () => {
 		const duplicate = db
 			.insert(recipeIngredient)

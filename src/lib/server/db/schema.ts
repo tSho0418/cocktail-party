@@ -104,6 +104,8 @@ export const recipe = pgTable(
 		check('recipe_abv_override_one_decimal', oneDecimal(t.abvOverride)),
 		// FR-024: a Non-alcoholic Recipe is fixed at 0%.
 		check('recipe_non_alcoholic_zero', sql`${t.hasAlcohol} OR ${t.autoAbv} = 0`),
+		// An alcoholic Recipe never shows 0.0%; the service clamps auto_abv to at least 0.1.
+		check('recipe_alcoholic_nonzero', sql`NOT ${t.hasAlcohol} OR ${t.autoAbv} > 0`),
 		// FR-021/022: the upper bound (highest Ingredient ABV) is enforced in the service layer.
 		check(
 			'recipe_abv_override_range',

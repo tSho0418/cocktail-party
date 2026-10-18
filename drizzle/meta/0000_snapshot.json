@@ -1,5 +1,5 @@
 {
-  "id": "865e30ee-1b89-44bd-8db1-b3386bff3a78",
+  "id": "24fb703e-9098-4bdf-9584-72f698957f03",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -559,6 +559,10 @@
         "recipe_non_alcoholic_zero": {
           "name": "recipe_non_alcoholic_zero",
           "value": "\"recipe\".\"has_alcohol\" OR \"recipe\".\"auto_abv\" = 0"
+        },
+        "recipe_alcoholic_nonzero": {
+          "name": "recipe_alcoholic_nonzero",
+          "value": "NOT \"recipe\".\"has_alcohol\" OR \"recipe\".\"auto_abv\" > 0"
         },
         "recipe_abv_override_range": {
           "name": "recipe_abv_override_range",
