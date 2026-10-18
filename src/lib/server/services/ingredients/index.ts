@@ -3,7 +3,7 @@
 import { asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../../db';
 import { ingredient, recipe, recipeIngredient } from '../../db/schema';
-import { hasAtMostOneDecimal, recomputeDerived } from '../../domain/alcohol';
+import { hasAtMostOneDecimal, recomputeDerived } from '#lib/domain/alcohol/index.js';
 import {
 	MAX_NAME_LENGTH,
 	ingredientNameKey,
