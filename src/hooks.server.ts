@@ -8,7 +8,7 @@ const isUnder = (pathname: string, prefix: string) =>
 	pathname === prefix || pathname.startsWith(`${prefix}/`);
 
 // Pages a Member without a Username may still reach (FR-052).
-const BEFORE_USERNAME = ['/welcome', '/logout'];
+const BEFORE_USERNAME = ['/welcome', '/logout', '/withdraw'];
 
 const authHandle: Handle = async ({ event, resolve }) => {
 	const { pathname } = event.url;
