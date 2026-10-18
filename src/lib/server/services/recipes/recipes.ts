@@ -20,7 +20,7 @@ import {
 	validateMixRatio,
 	validateRecipeIngredients,
 	type Result
-} from '#lib/server/domain/alcohol/index.js';
+} from '#lib/domain/alcohol/index.js';
 
 /** The app's `db` or a transaction on it; nested calls become savepoints. */
 export type Db = PgDatabase<NodePgQueryResultHKT, typeof schema>;
