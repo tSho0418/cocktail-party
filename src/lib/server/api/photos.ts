@@ -9,12 +9,12 @@ import {
 	type OwnerKind
 } from '#lib/server/services/images/index.js';
 
-/** Default until auth exists: the route can never be open by accident. */
+/** Default for a standalone photosRoute(): the route can never be open by accident. app.ts passes the real guard. */
 export const denyAll: MiddlewareHandler = async (c) => c.json({ error: 'unauthorized' }, 401);
 
 let r2: ImageStore | undefined;
 // Built on first use so build, tests and the e2e run need no R2 credentials.
-const defaultStore = () => (r2 ??= r2ImageStore(r2ConfigFromEnv()));
+export const defaultStore = () => (r2 ??= r2ImageStore(r2ConfigFromEnv()));
 
 const OWNER_KINDS: OwnerKind[] = ['recipe', 'member'];
 
