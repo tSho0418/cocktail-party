@@ -59,6 +59,7 @@
 		]
 	},
 	"dependencies": {
+		"better-auth": "^1.7.10",
 		"drizzle-orm": "^0.45.4",
 		"hono": "^4.13.13",
 		"pg": "^8.23.1"

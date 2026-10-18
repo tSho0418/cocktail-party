@@ -1,7 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { db } from './index';
-import { ingredient, member, recipe, recipeIngredient, report } from './schema';
+import { account, ingredient, member, recipe, recipeIngredient, report } from './schema';
 
 /** Postgres SQLSTATE of a failed query (drizzle wraps the pg error in `cause`). */
 async function pgErrorCode(query: Promise<unknown>) {
@@ -18,10 +18,13 @@ const UNIQUE_VIOLATION = '23505';
 
 let accounts = 0;
 async function insertMember(username: string | null = null) {
-	const [m] = await db
-		.insert(member)
-		.values({ provider: 'google', providerAccountId: `g-${++accounts}`, username })
-		.returning();
+	const [m] = await db.insert(member).values({ username }).returning();
+	await db.insert(account).values({
+		id: crypto.randomUUID(),
+		providerId: 'google',
+		accountId: `g-${++accounts}`,
+		userId: m.id
+	});
 	return m;
 }
 
@@ -132,8 +135,25 @@ describe('member constraints', () => {
 	});
 
 	it('only accepts known login providers (ADR 0005)', async () => {
-		const apple = db.insert(member).values({ provider: 'apple', providerAccountId: 'a-1' });
+		const [m] = await db.insert(member).values({}).returning();
+		const apple = db
+			.insert(account)
+			.values({ id: crypto.randomUUID(), providerId: 'apple', accountId: 'a-1', userId: m.id });
 		expect(await pgErrorCode(apple)).toBe(CHECK_VIOLATION);
+	});
+
+	it('links one provider account to one Member, and one Member to one provider (FR-051)', async () => {
+		const m = await insertMember();
+		const [other] = await db.insert(member).values({}).returning();
+		const link = (userId: string, providerId: string, accountId: string) =>
+			db.insert(account).values({ id: crypto.randomUUID(), providerId, accountId, userId });
+		expect(await pgErrorCode(link(m.id, 'line', 'l-1'))).toBe(UNIQUE_VIOLATION);
+		expect(await pgErrorCode(link(other.id, 'google', `g-${accounts}`))).toBe(UNIQUE_VIOLATION);
+	});
+
+	it('creates a Member without an email (FR-050)', async () => {
+		const m = await insertMember();
+		expect(m.email).toBeNull();
 	});
 });
 
