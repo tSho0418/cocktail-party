@@ -18,10 +18,7 @@ let memberActor: Actor;
 beforeAll(async () => {
 	const [a, m] = await db
 		.insert(member)
-		.values([
-			{ provider: 'google', providerAccountId: `ing-admin-${randomUUID()}`, isAdministrator: true },
-			{ provider: 'line', providerAccountId: `ing-member-${randomUUID()}` }
-		])
+		.values([{ isAdministrator: true }, {}])
 		.returning();
 	admin = { memberId: a.id, isAdministrator: true };
 	memberActor = { memberId: m.id, isAdministrator: false };

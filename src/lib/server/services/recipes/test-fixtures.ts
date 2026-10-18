@@ -20,7 +20,6 @@ export async function isolated(fn: (tx: Db) => Promise<void>) {
 	}
 }
 
-let accounts = 0;
 export async function seedMember(
 	tx: Db,
 	username: string,
@@ -29,8 +28,6 @@ export async function seedMember(
 	const [m] = await tx
 		.insert(member)
 		.values({
-			provider: 'google',
-			providerAccountId: `recipes-${++accounts}`,
 			username,
 			isAdministrator: opts.isAdministrator ?? false,
 			suspendedAt: opts.suspended ? new Date() : null
