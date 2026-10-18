@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { db } from '#lib/server/db/index.js';
 import { ingredient, member } from '#lib/server/db/schema.js';
 import { createRecipe } from '#lib/server/services/recipes/index.js';
+import { upload } from '#lib/server/services/recipes/test-fixtures.js';
 import type { PageData as ListData } from './$types';
 import type { PageData as DetailData } from './recipes/[id]/$types';
 import { load as loadList } from './+page.server';
@@ -30,7 +31,7 @@ async function make(actor: typeof owner, title: string, ids = [gin, tonic], extr
 	const r = await createRecipe(db, actor, {
 		title,
 		description: `${tag} の説明`,
-		mainPhotoKey: `recipe/${randomUUID()}/list.webp`,
+		mainPhotoKey: await upload(db, actor),
 		ingredients: ids.map((ingredientId) => ({ ingredientId, mixRatio: 3 })),
 		steps: ['注ぐ', '混ぜる'],
 		...extra
