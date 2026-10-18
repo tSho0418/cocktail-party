@@ -78,6 +78,14 @@ Better Auth runs inside the app (ADR 0005); its endpoints are under `/api/auth/*
 
 The db tests drive Better Auth's real sign-in and callback for LINE with the token endpoint stubbed. Real Google/LINE logins have not been tried.
 
+## Branches, CI and deploy
+
+Work on a branch off `develop` and open a PR into `develop`; link the issue with `Closes #N`. Merging needs the CI workflow green (`check`, `lint`, `test`, `build`, `test:db`).
+
+`develop` is released by a PR into `main`. That PR also runs the Playwright e2e job. A push to `main` (the merge) runs `.github/workflows/deploy.yml`: the full CI including e2e, then `pnpm db:migrate` against Neon, then a Vercel production deploy. Migrations run before the new code is live, so keep them backward compatible with the running version.
+
+The `production` GitHub environment needs the secrets `DATABASE_URL`, `VERCEL_TOKEN`, `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`. App runtime variables (`BETTER_AUTH_*`, `GOOGLE_*`, `LINE_*`, `R2_*`) are set in the Vercel project.
+
 ## Photos (ADR 0003)
 
 `PhotoPicker.svelte` shrinks a selected photo (JPEG/PNG/WebP, up to 10MB) below 4.5MB in the browser; `POST /api/photos?kind=recipe|member` takes the raw bytes as `application/octet-stream`, and `storePhoto` re-encodes them with `sharp` into two metadata-free WebP files (`<kind>/<id>/list.webp` 480px, `detail.webp` 1600px) in R2. The original is never stored. The route denies everything (401) until auth passes an `authorize` middleware to `photosRoute()` in `app.ts`. R2 is configured by the `R2_*` variables (declared in `src/env.ts`, examples in `.env.example`), read on the first upload. Derivatives are served with `Cache-Control: public, max-age=3600`, so a deleted Photo can still be fetched from an edge or browser cache for up to about an hour. `/dev/photo-picker` is the e2e harness page (uploads nothing); it returns 404 unless `E2E_HARNESS=1`, which only `playwright.config.ts` sets. Set `PW_REUSE_SERVER=1` to let `pnpm test:e2e` reuse an already running preview server on port 4173 (off by default, since another worktree may own that port).
