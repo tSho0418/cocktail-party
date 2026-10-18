@@ -65,11 +65,18 @@ test('search the list, open the Recipe, and read it with OGP', async ({ page }) 
 	);
 });
 
-test('the Recipe body is in the server HTML (FR-062)', async ({ request }) => {
-	const html = await (await request.get(`/recipes/${recipeId}`)).text();
-	expect(html).toContain(title);
-	expect(html).toContain('氷に注ぐ');
-	expect(html).toContain('property="og:image"');
+test.describe('first visit, Age Gate open', () => {
+	// The config's consent cookie would close the gate; the body must be there with it open.
+	test.use({ storageState: { cookies: [], origins: [] } });
+
+	test('the Recipe body and OGP are in the server HTML (FR-062, FR-080)', async ({ request }) => {
+		const html = await (await request.get(`/recipes/${recipeId}`)).text();
+		expect(html).toContain('data-age-gate');
+		expect(html).toContain(title);
+		expect(html).toContain('氷に注ぐ');
+		expect(html).toContain(`${photoPrefix}/detail.webp`);
+		expect(html).toContain('property="og:image"');
+	});
 });
 
 test('an unknown Recipe is a 404', async ({ request }) => {
