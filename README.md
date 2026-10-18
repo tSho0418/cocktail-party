@@ -71,7 +71,7 @@ Routes live in `src/lib/server/api/` and only validate the request shape, call a
 | `POST /api/ingredients`          | Member        | `{ name, abvPercent, isBaseSpirit? }`; 0% for a Member (FR-012), above 0% only for an Administrator (FR-013)                                                                        |
 | `PATCH /api/ingredients/:id/abv` | Administrator | `{ abvPercent }`, recomputes the Recipes using it (FR-015)                                                                                                                          |
 
-Photo deletion on Recipe edit/delete removes the stored key and its `list`/`detail` sibling, best effort after commit (a storage failure does not fail the request).
+Photo deletion on Recipe edit/delete removes unreferenced `recipe/<uuid>/{list,detail}.webp` keys and their sibling, best effort after commit (a storage failure, including missing `R2_*` variables, does not fail the request). Any other key, e.g. a Member icon, is never deleted.
 
 ## Auth
 
