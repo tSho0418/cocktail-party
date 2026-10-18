@@ -21,6 +21,7 @@ const OWNER_KINDS: OwnerKind[] = ['recipe', 'member'];
 /**
  * POST /photos?kind=recipe|member with the raw image as application/octet-stream
  * (multipart overhead would push a 4.5MB photo over the platform body limit).
+ * The Content-Type must be exactly `application/octet-stream` (no parameters); our own client sets it.
  * `authorize` must let only a signed-in Member through.
  */
 export const photosRoute = ({

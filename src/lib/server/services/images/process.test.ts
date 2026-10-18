@@ -94,6 +94,12 @@ describe('processUpload', () => {
 		for (const [b, error] of cases) expect(await processUpload(b)).toEqual({ ok: false, error });
 	});
 
+	it('rejects a truncated JPEG (pins failOn error; none would accept it)', async () => {
+		const full = await jpegWithGps({ noise: true });
+		const cut = full.subarray(0, Math.floor(full.length * 0.6));
+		expect(await processUpload(cut)).toEqual({ ok: false, error: 'undecodable' });
+	});
+
 	it('rejects > 4.5MB and pixel bombs', async () => {
 		expect(await processUpload(Buffer.alloc(MAX_BYTES + 1, 0xff))).toEqual({
 			ok: false,

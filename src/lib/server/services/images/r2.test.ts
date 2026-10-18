@@ -41,7 +41,7 @@ describe('r2ImageStore', () => {
 		expect(req.hostname).toBe('photos.acct123.r2.cloudflarestorage.com');
 		expect(req.path).toBe('/recipe/abc/list.webp');
 		expect(req.headers['content-type']).toBe('image/webp');
-		expect(req.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+		expect(req.headers['cache-control']).toBe('public, max-age=3600');
 		expect(req.headers['authorization']).toMatch(
 			/^AWS4-HMAC-SHA256 Credential=AKID\/\d{8}\/auto\/s3\//
 		);

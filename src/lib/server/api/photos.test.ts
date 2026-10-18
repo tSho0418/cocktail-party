@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Hono, type MiddlewareHandler } from 'hono';
 import { app } from './app';
-import { photosRoute } from './photos';
+import { denyAll, photosRoute } from './photos';
 import { MAX_BYTES, memoryImageStore } from '#lib/server/services/images/index.js';
 import { jpegWithGps } from '#lib/server/services/images/test-fixtures.js';
 
@@ -14,6 +14,7 @@ function setup(authorize: MiddlewareHandler = allow) {
 		api.request(`/photos${query}`, {
 			method: 'POST',
 			body,
+			...({ duplex: 'half' } as RequestInit), // undici needs it for a stream body; not in the DOM type
 			headers: { 'content-type': 'application/octet-stream', ...headers }
 		});
 	return { store, post };
@@ -42,6 +43,26 @@ describe('POST /api/photos', () => {
 		const { store, post } = setup(async (c) => c.json({ error: 'nope' }, 403));
 		expect((await post(new Uint8Array(await jpegWithGps()))).status).toBe(403);
 		expect(store.objects.size).toBe(0);
+	});
+
+	it('denies a chunked body (no Content-Length) without reading a single chunk', async () => {
+		// With a Content-Length bodyLimit never reads, so only a length-less stream shows the order.
+		let pulls = 0;
+		// highWaterMark 0: the stream itself never pulls ahead, so every pull is a read by the server.
+		const body = new ReadableStream<Uint8Array>(
+			{
+				pull(controller) {
+					if (++pulls > 3) controller.close();
+					else controller.enqueue(new Uint8Array(1024));
+				}
+			},
+			{ highWaterMark: 0 }
+		);
+		const { post } = setup(denyAll);
+		const res = await post(body);
+		expect(res.status).toBe(401);
+		await new Promise((r) => setTimeout(r, 10)); // let any background reader run
+		expect(pulls).toBe(0);
 	});
 
 	it('rejects an oversized Content-Length with 413', async () => {

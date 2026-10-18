@@ -1,4 +1,5 @@
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import * as privateEnv from '$app/env/private';
 import type { ImageStore } from './store';
 
 export type R2Config = {
@@ -9,8 +10,10 @@ export type R2Config = {
 	publicBaseUrl: string;
 };
 
-/** Reads R2_* from the environment; throws naming every missing variable. */
-export function r2ConfigFromEnv(env: Record<string, string | undefined> = process.env): R2Config {
+/** Reads R2_* (declared in src/env.ts); throws naming every missing variable. */
+export function r2ConfigFromEnv(
+	env: Record<string, string | undefined> = privateEnv as Record<string, string | undefined>
+): R2Config {
 	const names = {
 		accountId: 'R2_ACCOUNT_ID',
 		accessKeyId: 'R2_ACCESS_KEY_ID',
@@ -43,8 +46,9 @@ export function r2ImageStore(config: R2Config, s3 = r2Client(config)): ImageStor
 					Key: key,
 					Body: data,
 					ContentType: contentType,
-					// Keys are random and never rewritten.
-					CacheControl: 'public, max-age=31536000, immutable'
+					// Short TTL, not immutable: a deleted Photo (FR-058, FR-074) must drop out of edge and
+					// browser caches within about an hour.
+					CacheControl: 'public, max-age=3600'
 				})
 			);
 		},

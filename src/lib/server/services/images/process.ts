@@ -39,7 +39,8 @@ export async function processUpload(bytes: Uint8Array): Promise<ProcessResult> {
 	try {
 		// Header only: reports the declared size without decoding pixels.
 		const meta = await sharp(buf).metadata();
-		// The decoder must agree with the magic bytes (catches polyglots / truncated headers).
+		// Defensive: libvips also sniffs magic bytes, so in practice a mismatch throws (undecodable)
+		// before this can fire. Kept as a cheap guard in case the decoder ever trusts something else.
 		if (meta.format !== format) return { ok: false, error: 'format_mismatch' };
 		if (meta.width * meta.height > MAX_PIXELS) return { ok: false, error: 'too_many_pixels' };
 		const base = sharp(buf, { limitInputPixels: MAX_PIXELS, failOn: 'error' });
