@@ -1,1 +1,6 @@
 @import 'tailwindcss';
+
+/* No scrolling behind the Age Gate; works without JS since the gate is server-rendered. */
+html:has([data-age-gate]) {
+	overflow: hidden;
+}
