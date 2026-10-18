@@ -3,7 +3,7 @@ import { isHttpError, isRedirect } from '@sveltejs/kit';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { db } from '#lib/server/db/index.js';
 import { ingredient, member } from '#lib/server/db/schema.js';
-import { createRecipe } from '#lib/server/services/recipes/index.js';
+import { createRecipe, recordPhotoUpload } from '#lib/server/services/recipes/index.js';
 import { load } from './+page.server';
 
 const tag = randomUUID().slice(0, 8);
@@ -28,6 +28,9 @@ beforeAll(async () => {
 			{ name: `トニック${tag}`, abvPercent: 0 }
 		])
 		.returning();
+	// The photos must be Alice's recorded uploads (FR-007).
+	for (const n of ['1', '2'])
+		await recordPhotoUpload(db, a.id, 'recipe', `6a1d5f0e-0000-4000-8000-00000000000${n}`);
 	const created = await createRecipe(
 		db,
 		{ memberId: a.id, isAdministrator: false },
