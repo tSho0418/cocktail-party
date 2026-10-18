@@ -199,6 +199,16 @@ describe('recomputeDerived', () => {
 		});
 	});
 
+	it('rounds a float just below a .x5 tie up, like the exact decimal (31.95 -> 32)', () => {
+		const items = [
+			{ id: 'a', mixRatio: 22.5, abvPercent: 64.2, isBaseSpirit: false },
+			{ id: 'b', mixRatio: 45.9, abvPercent: 48.3, isBaseSpirit: false },
+			{ id: 'c', mixRatio: 46.2, abvPercent: 0, isBaseSpirit: false }
+		];
+		expect(computeAutoAbv(items)).toBeLessThan(31.95); // float lands at 31.949999999999996
+		expect(recomputeDerived(items).autoAbv).toBe(32);
+	});
+
 	it('keeps multiple Bases', () => {
 		const rum = { id: 'rum', mixRatio: 1, abvPercent: 40, isBaseSpirit: true };
 		expect(recomputeDerived([gin, rum, tonic]).baseIngredientIds).toEqual(['gin', 'rum']);
