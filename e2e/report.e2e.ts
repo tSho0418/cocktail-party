@@ -51,7 +51,6 @@ async function cleanUp(ids: string[]) {
 test.afterAll(async () => {
 	await cleanUp(memberIds);
 	await pool.query(`delete from ingredient where name = any($1)`, [[gin, tonic]]);
-	await pool.end();
 });
 
 const reportsOf = async (reporterId: string) =>
@@ -138,4 +137,26 @@ test('a signed-out visitor does not see the Report form', async ({ page }) => {
 	await page.goto(`/recipes/${recipeId}`);
 	await expect(page.getByRole('heading', { name: title })).toBeVisible();
 	await expect(page.getByText('このレシピを通報する')).toHaveCount(0);
+});
+
+test.describe('without JavaScript', () => {
+	test.use({ javaScriptEnabled: false });
+
+	test('a refused Report shows its message in the opened form (FR-071)', async ({
+		page,
+		context
+	}) => {
+		memberIds.push(await signIn(context, `e2e_rpt_njs_${tag}`));
+		const send = async () => {
+			await page.goto(`/recipes/${recipeId}`);
+			await page.getByText('このレシピを通報する').click();
+			await page.getByLabel('スパム', { exact: true }).check();
+			await page.getByRole('button', { name: '通報する' }).click();
+		};
+		await send();
+		await expect(page.getByRole('status')).toContainText('通報を受け付けました');
+		await send();
+		await expect(page.getByRole('alert')).toContainText('すでに通報しています');
+		await expect(page.getByRole('alert')).toBeVisible();
+	});
 });

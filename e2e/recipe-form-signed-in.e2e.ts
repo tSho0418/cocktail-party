@@ -28,7 +28,6 @@ test.afterAll(async () => {
 	await pool.query(`delete from recipe where member_id = any($1)`, [memberIds]);
 	await pool.query(`delete from member where id = any($1)`, [memberIds]);
 	await pool.query(`delete from ingredient where name = any($1)`, [[gin, tonic]]);
-	await pool.end();
 });
 
 const photo = () =>

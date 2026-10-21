@@ -6,7 +6,7 @@ const tag = randomUUID().slice(0, 8);
 const gin = `E2E管理ジン${tag}`;
 const water = `E2E管理水${tag}`;
 const memberIds: string[] = [];
-const recipeIds: string[] = [];
+let adminId: string;
 const ingredientNames: string[] = [];
 let n = 0;
 
@@ -36,14 +36,13 @@ async function cleanUp(ids: string[]) {
 test.afterAll(async () => {
 	await cleanUp(memberIds);
 	await pool.query(`delete from ingredient where name = any($1)`, [ingredientNames]);
-	await pool.end();
 });
 
 /** The signed-in Administrator of this test. */
 test.beforeEach(async ({ context }) => {
-	const id = await signIn(context, `e2e_adm_a${++n}_${tag}`);
-	memberIds.push(id);
-	await pool.query(`update member set is_administrator = true where id = $1`, [id]);
+	adminId = await signIn(context, `e2e_adm_a${++n}_${tag}`);
+	memberIds.push(adminId);
+	await pool.query(`update member set is_administrator = true where id = $1`, [adminId]);
 });
 
 /** A Recipe by a fresh author, reported once by a fresh reporter; `note` finds its row on /admin. */
@@ -54,26 +53,30 @@ async function seedReport(
 ) {
 	const authorName = `e2e_adm_w${++n}_${tag}`;
 	const author = await signedInContext(browser, baseURL, authorName);
-	const recipeId = await seedRecipe(author.context, author.memberId, {
-		title: `E2E管理レシピ${randomUUID().slice(0, 8)}`,
-		ingredients: [
-			{ name: gin, mixRatio: 1 },
-			{ name: water, mixRatio: 1 }
-		]
-	});
-	await author.context.close();
-	const reporterId: string = (
-		await pool.query(`insert into member (username) values ($1) returning id`, [
-			`e2e_adm_r${++n}_${tag}`
-		])
-	).rows[0].id;
-	await pool.query(
-		`insert into report (recipe_id, reporter_id, reported_member_id, reason, detail) values ($1, $2, $3, 'spam', $4)`,
-		[recipeId, reporterId, author.memberId, note]
-	);
-	memberIds.push(author.memberId, reporterId);
-	recipeIds.push(recipeId);
-	return { recipeId, authorName, authorId: author.memberId, note };
+	memberIds.push(author.memberId);
+	try {
+		const recipeId = await seedRecipe(author.context, author.memberId, {
+			title: `E2E管理レシピ${randomUUID().slice(0, 8)}`,
+			ingredients: [
+				{ name: gin, mixRatio: 1 },
+				{ name: water, mixRatio: 1 }
+			]
+		});
+		const authorState = await author.context.storageState();
+		const reporterId: string = (
+			await pool.query(`insert into member (username) values ($1) returning id`, [
+				`e2e_adm_r${++n}_${tag}`
+			])
+		).rows[0].id;
+		memberIds.push(reporterId);
+		await pool.query(
+			`insert into report (recipe_id, reporter_id, reported_member_id, reason, detail) values ($1, $2, $3, 'spam', $4)`,
+			[recipeId, reporterId, author.memberId, note]
+		);
+		return { recipeId, authorName, authorId: author.memberId, authorState, note };
+	} finally {
+		await author.context.close();
+	}
 }
 
 const row = (page: Page, note: string) =>
@@ -145,7 +148,7 @@ test('Suspension hides the author, logs them out, and lifting it brings the Reci
 	browser,
 	baseURL
 }) => {
-	const { note, recipeId, authorName, authorId } = await seedReport(browser, baseURL);
+	const { note, recipeId, authorName, authorId, authorState } = await seedReport(browser, baseURL);
 	const visible = async () => (await page.request.get(`/recipes/${recipeId}`)).status();
 	expect(await visible()).toBe(200);
 
@@ -156,6 +159,14 @@ test('Suspension hides the author, logs them out, and lifting it brings the Reci
 		authorName
 	);
 	expect(await visible()).toBe(404);
+	// The author's own session is revoked the next time it is used.
+	const sessions = async () =>
+		(await pool.query(`select 1 from session where user_id = $1`, [authorId])).rowCount;
+	expect(await sessions()).toBe(1);
+	const authorContext = await browser.newContext({ baseURL, storageState: authorState });
+	await authorContext.request.get('/');
+	await authorContext.close();
+	expect(await sessions()).toBe(0);
 
 	await row(page, note).getByRole('button', { name: '停止を解除' }).click();
 	await expect(row(page, note)).not.toContainText('停止中');
@@ -185,8 +196,8 @@ test('Suspension refuses yourself and unknown names with a message (FR-075)', as
 	await username.fill('e2e_adm_nobody');
 	await page.getByRole('button', { name: '停止する' }).click();
 	await expect(page.getByRole('alert')).toContainText('見つかりませんでした');
-	const self = (await pool.query(`select username from member where id = $1`, [memberIds.at(-1)]))
-		.rows[0].username;
+	const self = (await pool.query(`select username from member where id = $1`, [adminId])).rows[0]
+		.username;
 	await username.fill(self);
 	await page.getByRole('button', { name: '停止する' }).click();
 	await expect(page.getByRole('alert')).toContainText('自分自身は停止できません');
@@ -215,7 +226,7 @@ test('an alcoholic Ingredient is registered, and editing its ABV recalculates th
 	await page.goto('/admin');
 	await page.getByLabel('名前', { exact: true }).fill(name);
 	await page.getByLabel('度数(%)', { exact: true }).fill('20');
-	await page.getByLabel('ベース').check();
+	await page.getByLabel('ベース', { exact: true }).check();
 	await page.getByRole('button', { name: '登録' }).click();
 	await expect(page.getByLabel(`${name}の度数(%)`)).toHaveValue('20');
 	expect(
@@ -300,10 +311,16 @@ test.describe('on a phone', () => {
 		// Enough Reports to push the Ingredient form below the first screen.
 		for (let i = 0; i < 3; i++) await seedReport(browser, baseURL);
 		await page.goto('/admin');
-		await page.getByLabel('名前', { exact: true }).fill(gin);
+		const name = page.getByLabel('名前', { exact: true });
+		await name.fill(gin);
 		await page.getByLabel('度数(%)', { exact: true }).fill('40');
+		await name.scrollIntoViewIfNeeded();
+		expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
 		await page.getByRole('button', { name: '登録' }).click();
-		await expect(page.getByRole('alert')).toContainText('すでに登録されています');
-		await expect(page.getByRole('alert')).toBeInViewport();
+		const alert = page.getByRole('alert');
+		await expect(alert).toContainText('すでに登録されています');
+		// Still scrolled down, and the message sits at the top of the screen with it.
+		expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+		expect((await alert.boundingBox())!.y).toBeLessThan(40);
 	});
 });

@@ -51,7 +51,10 @@ describe('?/report action (FR-070/071)', () => {
 			reporterId: reporter.id,
 			reportedMemberId: author.id
 		});
-		expect(await send(reporter, { reason: 'spam' })).toMatchObject({ status: 400 });
+		expect(await send(reporter, { reason: 'spam' })).toMatchObject({
+			status: 400,
+			data: { reportError: 'このレシピはすでに通報しています。' }
+		});
 		expect(await send(reporter, { reason: 'rude' })).toMatchObject({ status: 400 });
 		expect(await send(reporter, { reason: 'spam', detail: 'あ'.repeat(201) })).toMatchObject({
 			status: 400

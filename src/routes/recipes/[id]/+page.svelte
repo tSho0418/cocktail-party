@@ -133,7 +133,8 @@
 					通報を受け付けました。ありがとうございます。
 				</p>
 			{:else}
-				<details>
+				<!-- Open after a failed submit, so the error is not hidden inside a closed <details> (no JavaScript: the page is re-rendered). -->
+				<details open={!!form?.reportError}>
 					<summary id="report-heading" class="cursor-pointer text-sm text-gray-600 underline">
 						このレシピを通報する
 					</summary>
