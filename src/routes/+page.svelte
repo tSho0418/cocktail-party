@@ -155,6 +155,7 @@
 		<ul class="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
 			{#each data.recipes as recipe, i (recipe.id)}
 				<li class="overflow-hidden rounded border border-gray-200">
+					<!-- The author link must sit outside the card link: no nested <a>. -->
 					<a href={resolve('/recipes/[id]', { id: recipe.id })} class="block hover:bg-gray-50">
 						{#if recipe.photoUrl}
 							<img
@@ -182,11 +183,15 @@
 							{#if recipe.bases.length > 0}
 								<p class="text-gray-600">{recipe.bases.map((b) => b.name).join('・')}</p>
 							{/if}
-							<p class="text-xs text-gray-500">
-								{recipe.ownerUsername ?? ''} Like {recipe.likeCount}
-							</p>
 						</div>
 					</a>
+					<p class="px-2 pb-2 text-xs text-gray-500">
+						{#if recipe.ownerUsername}<a
+								href={resolve('/members/[username]', { username: recipe.ownerUsername })}
+								class="underline">{recipe.ownerUsername}</a
+							>{/if}
+						Like {recipe.likeCount}
+					</p>
 				</li>
 			{/each}
 		</ul>

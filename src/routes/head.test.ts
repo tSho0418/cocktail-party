@@ -62,7 +62,16 @@ const recipeHead = (
 		autoAbv: 10,
 		isOverride: false
 	};
-	const data = { recipe, mainPhotoUrl: over.mainPhotoUrl ?? null, extraPhotoUrls: [] };
+	const data = {
+		recipe,
+		mainPhotoUrl: over.mainPhotoUrl ?? null,
+		extraPhotoUrls: [],
+		reactions: { likeCount: 0, liked: false, saved: false },
+		signedIn: false,
+		isOwner: false,
+		canEdit: false,
+		canDelete: false
+	};
 	return render(RecipePage, { props: { data } as never }).head;
 };
 

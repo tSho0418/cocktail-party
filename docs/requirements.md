@@ -112,7 +112,7 @@
 | 区分 | 画面 |
 |---|---|
 | 誰でも | トップ(新着一覧と検索)、検索結果、Recipe 詳細、Member のプロフィール、利用規約、プライバシーポリシー、Age Gate(モーダル) |
-| Member | ログイン(4つの提供元のボタン)、初回の Username 設定、Recipe の投稿・編集、Save 一覧、プロフィールの編集、退会、Report の送信 |
+| Member | ログイン(2つの提供元のボタン)、初回の Username 設定、Recipe の投稿・編集、Save 一覧、プロフィールの編集、退会、Report の送信 |
 | Administrator | Report の一覧、酒類 Ingredient の登録と度数の編集、Member の Suspension、Recipe の削除 |
 
 ### 2.10 共有

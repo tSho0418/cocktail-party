@@ -96,7 +96,7 @@ Input bounds: `GET /api/recipes` takes at most 10 `keyword` terms and 20 `ingred
 
 ### Social UI
 
-`/members/[username]` is the profile (tabs: Recipes, Following, Followers, and Saved for the owner only; others get 404). `/members/[username]/edit` changes Username, bio and icon; `/withdraw` is the withdrawal confirmation (no grace period, FR-058), which also deletes the stored photos. Reusable components for the Recipe detail page (not mounted there by this work): `LikeButton`, `SaveButton` in `#lib/components`, fed by `GET /api/recipes/:id/reactions` or `getReactions` from `#lib/server/services/social`.
+`/members/[username]` is the profile (tabs: Recipes, Following, Followers, and Saved for the owner only; others get 404). `/members/[username]/edit` changes Username, bio and icon; `/withdraw` is the withdrawal confirmation (no grace period, FR-058), which also deletes the stored photos. The Recipe detail page mounts `LikeButton` and `SaveButton` (`#lib/components`), with their initial state from `getReactions` in the page load (server-rendered, no flicker); Like shows a count only and is hidden on one's own Recipe, Save is for signed-in Members. The owner also gets an edit link and a confirmed delete (`?/delete`, which also removes the Likes, Saves and stored photos), and an Administrator gets the delete alone (no notice to the author, FR-074). The author's name on the detail page and the list cards links to `/members/[username]`.
 
 ## Auth
 

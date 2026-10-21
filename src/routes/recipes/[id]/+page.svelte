@@ -2,6 +2,8 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { enhance } from '$app/forms';
+	import LikeButton from '#lib/components/LikeButton.svelte';
+	import SaveButton from '#lib/components/SaveButton.svelte';
 	import { REPORT_REASON_LABELS } from '#lib/report-messages.js';
 	import type { PageProps } from './$types';
 
@@ -43,11 +45,29 @@
 	<article class="mt-4">
 		<h1 class="text-3xl font-bold">{recipe.title}</h1>
 		<p class="mt-1 text-sm text-gray-600">
-			{#if recipe.owner.username}{recipe.owner.username} ・
+			{#if recipe.owner.username}<a
+					href={resolve('/members/[username]', { username: recipe.owner.username })}
+					class="underline">{recipe.owner.username}</a
+				>
+				・
 			{/if}
 			<time datetime={new Date(recipe.createdAt).toISOString()}>{date(recipe.createdAt)}</time>
-			・ Like {recipe.likeCount}
 		</p>
+
+		<div class="mt-3 flex flex-wrap items-center gap-3">
+			<!-- FR-055: a count only; the Like button is not offered on one's own Recipe. -->
+			<LikeButton
+				recipeId={recipe.id}
+				liked={data.reactions.liked}
+				likeCount={data.reactions.likeCount}
+				signedIn={data.signedIn}
+				isOwner={data.isOwner}
+			/>
+			<!-- FR-056: Saves are private; a signed-out visitor is not shown the button. -->
+			{#if data.signedIn}
+				<SaveButton recipeId={recipe.id} saved={data.reactions.saved} signedIn />
+			{/if}
+		</div>
 
 		{#if data.mainPhotoUrl}
 			<img
@@ -123,6 +143,39 @@
 			</section>
 		{/if}
 	</article>
+
+	{#if data.canEdit || data.canDelete}
+		<section class="mt-8 border-t border-gray-200 pt-4" aria-label="レシピの管理">
+			<div class="flex flex-wrap items-start gap-4">
+				{#if data.canEdit}
+					<a
+						href={resolve('/recipes/[id]/edit', { id: recipe.id })}
+						class="rounded border border-gray-300 px-4 py-2 text-sm font-medium">編集する</a
+					>
+				{/if}
+				{#if data.canDelete}
+					<details>
+						<summary class="cursor-pointer text-sm text-red-700 underline">削除する</summary>
+						<form method="POST" action="?/delete" class="mt-3 flex flex-col gap-3">
+							<p class="text-sm">
+								このレシピを削除します。付いているいいねと保存も一緒に消え、元に戻せません。{data.isOwner
+									? ''
+									: '投稿者には通知されません。'}
+							</p>
+							{#if form?.deleteError}
+								<p role="alert" class="text-sm text-red-700">{form.deleteError}</p>
+							{/if}
+							<button
+								class="self-start rounded bg-red-700 px-4 py-2 text-sm font-medium text-white"
+							>
+								削除を確定する
+							</button>
+						</form>
+					</details>
+				{/if}
+			</div>
+		</section>
+	{/if}
 
 	{#if data.canReport}
 		<section class="mt-10 border-t border-gray-200 pt-4" aria-labelledby="report-heading">
