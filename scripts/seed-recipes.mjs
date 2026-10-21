@@ -22,6 +22,16 @@ const { module: images } = await runnerImport('./src/lib/server/services/images/
 const { module: r2 } = await runnerImport('./src/lib/server/services/images/r2.ts', opts);
 
 const noStore = process.argv.includes('--no-store');
+const databaseUrl = process.env.DATABASE_URL;
+if (noStore && databaseUrl) {
+	const host = new URL(databaseUrl).hostname;
+	if (!['localhost', '127.0.0.1', '[::1]'].includes(host)) {
+		console.error(
+			`--no-store is for a local database only, but DATABASE_URL points at "${host}". Set the R2_* variables and run without --no-store.`
+		);
+		process.exit(1);
+	}
+}
 let store;
 if (noStore) {
 	console.warn('--no-store: images are not saved anywhere; the Recipes will show no photo.');

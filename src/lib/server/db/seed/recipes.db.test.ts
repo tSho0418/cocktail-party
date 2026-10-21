@@ -4,7 +4,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { memoryImageStore } from '../../services/images/store';
 import { db } from '../index';
-import { ingredient, recipe, recipeIngredient } from '../schema';
+import { account, ingredient, member, recipe, recipeIngredient } from '../schema';
 import { seedIngredients } from './ingredients';
 import { seedRecipeList, seedRecipes } from './recipes';
 
@@ -39,5 +39,17 @@ describe('demo Recipe seed (DT-002)', () => {
 		expect(bases.length).toBeGreaterThanOrEqual(6);
 		// Each Recipe has its Main Photo stored (two derivatives per Recipe).
 		expect(store.objects.size).toBe(rows.length * 2);
+	});
+
+	it('refuses to post as a real Member that already has the demo Username', async () => {
+		await db.execute(sql`truncate member cascade`);
+		await seedIngredients(drizzle({ client: pool }));
+		const [real] = await db
+			.insert(member)
+			.values({ username: 'demo_bartender' })
+			.returning({ id: member.id });
+		await db.insert(account).values({ accountId: 'g-1', providerId: 'google', userId: real.id });
+		await expect(seedRecipes(pool, memoryImageStore())).rejects.toThrow(/real Member/);
+		expect(await db.select().from(recipe)).toHaveLength(0);
 	});
 });

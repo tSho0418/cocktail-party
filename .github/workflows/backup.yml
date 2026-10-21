@@ -7,6 +7,11 @@ name: Backup
 #                                 needs a session, not PgBouncer's transaction mode.
 #   BACKUP_R2_ACCOUNT_ID, BACKUP_R2_ACCESS_KEY_ID, BACKUP_R2_SECRET_ACCESS_KEY, BACKUP_R2_BUCKET
 #                                 an S3 API token with Object Read & Write on the backup bucket only.
+#                                 The bucket MUST be private (no public access, no custom domain) and
+#                                 separate from the Photo bucket: the dumps hold every Member's data.
+# Set the `production` environment's Deployment branches to `main` only, so no other branch can read
+# these secrets.
+# The `session` and `verification` tables are dumped without their rows (login records, OAuth state).
 # Disabled for now (CD postponed, like deploy.yml): runs only when started by hand from the Actions tab.
 # To enable the daily run, add under `on:`:
 #   schedule:
@@ -27,17 +32,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
-    env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      BUCKET: ${{ secrets.BACKUP_R2_BUCKET }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_R2_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_R2_SECRET_ACCESS_KEY }}
-      AWS_DEFAULT_REGION: auto
-      AWS_ENDPOINT_URL: https://${{ secrets.BACKUP_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
-      # R2 does not accept the default checksum headers of recent AWS CLI versions.
-      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
-      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
-      RETENTION_DAYS: 14
     steps:
       # The runner's pg_dump must not be older than the server (Neon runs Postgres 17).
       - name: Install postgresql-client-17
@@ -49,21 +43,43 @@ jobs:
           sudo apt-get install -y postgresql-client-17
 
       - name: Dump
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           set -euo pipefail
           NAME="cocktail-party-$(date -u +%Y%m%dT%H%M%SZ).dump"
           echo "NAME=$NAME" >> "$GITHUB_ENV"
           # Custom format: compressed, and restorable selectively with pg_restore.
-          /usr/lib/postgresql/17/bin/pg_dump --format=custom --no-owner --no-privileges --file "$NAME" "$DATABASE_URL"
+          /usr/lib/postgresql/17/bin/pg_dump --format=custom --no-owner --no-privileges \
+            --exclude-table-data=session --exclude-table-data=verification --file "$NAME" "$DATABASE_URL"
           # A dump pg_restore cannot read must fail the run, not become the newest "backup".
           /usr/lib/postgresql/17/bin/pg_restore --list "$NAME" > /dev/null
           ls -l "$NAME"
 
       - name: Upload
+        env:
+          BUCKET: ${{ secrets.BACKUP_R2_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_ENDPOINT_URL: https://${{ secrets.BACKUP_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          # R2 does not accept the default checksum headers of recent AWS CLI versions.
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
         run: aws s3 cp "$NAME" "s3://$BUCKET/$NAME" --only-show-errors
 
       # Runs after the upload, so a failing dump never empties the bucket. The date is in the key.
       - name: Delete dumps older than 14 days
+        env:
+          BUCKET: ${{ secrets.BACKUP_R2_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_ENDPOINT_URL: https://${{ secrets.BACKUP_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          # R2 does not accept the default checksum headers of recent AWS CLI versions.
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          RETENTION_DAYS: 14
         run: |
           set -euo pipefail
           CUTOFF="cocktail-party-$(date -u -d "-$RETENTION_DAYS days" +%Y%m%dT%H%M%SZ).dump"

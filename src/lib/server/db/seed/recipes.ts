@@ -12,7 +12,7 @@ import { storePhoto } from '../../services/images/store-photo';
 import { recordPhotoUpload } from '../../services/recipes/photos';
 import { createRecipe, type RecipeInput } from '../../services/recipes/recipes';
 import * as schema from '../schema';
-import { ingredient, member, photoUpload, recipe } from '../schema';
+import { account, ingredient, member, photoUpload, recipe } from '../schema';
 
 /** Direct Member rows, outside Better Auth: no `account` row, so nobody can log in as the author. */
 export const DEMO_USERNAME = 'demo_bartender';
@@ -343,8 +343,19 @@ export async function seedRecipes(pool: pg.Pool, store: ImageStore) {
 				.from(member)
 				.where(sql`lower(${member.username}) = ${DEMO_USERNAME}`)
 		)[0];
+	const found = await findDemo();
+	if (found) {
+		const [login] = await db
+			.select({ id: account.id })
+			.from(account)
+			.where(eq(account.userId, found.id));
+		if (login)
+			throw new Error(
+				`Member "${DEMO_USERNAME}" is a real Member (it has a login account); refusing to post Recipes as them`
+			);
+	}
 	const demo =
-		(await findDemo()) ??
+		found ??
 		(
 			await db
 				.insert(member)

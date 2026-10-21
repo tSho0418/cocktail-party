@@ -89,6 +89,12 @@ describe('LINE login (stubbed provider)', () => {
 		expect(await db.select().from(account).where(eq(account.accountId, 'U-again'))).toHaveLength(1);
 	});
 
+	it('does not keep the provider ID token, which carries email, name and picture claims', async () => {
+		await lineLogin({ sub: 'U-id-token', email: 'token@example.com', name: '山田' });
+		const [row] = await db.select().from(account).where(eq(account.accountId, 'U-id-token'));
+		expect(row.idToken).toBeNull();
+	});
+
 	it('does not store the provider email nor match other Members by it (FR-051)', async () => {
 		await lineLogin({ sub: 'U-mail-1', email: 'same@example.com' });
 		const second = await lineLogin({ sub: 'U-mail-2', email: 'same@example.com' });
