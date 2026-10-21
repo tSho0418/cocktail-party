@@ -81,12 +81,28 @@
 							<button class={button}>状態を変更</button>
 						</form>
 						{#if r.targetState === 'live' && r.recipeId}
-							<form method="POST" action={act('deleteRecipe')} use:enhance>
-								<input type="hidden" name="recipeId" value={r.recipeId} />
-								<button class="rounded bg-red-700 px-3 py-1 text-sm font-medium text-white"
-									>レシピを削除</button
+							<!-- Same confirmation as the Recipe page: opening <details> works without JavaScript. -->
+							<details>
+								<summary class="cursor-pointer text-sm text-red-700 underline"
+									>レシピを削除する</summary
 								>
-							</form>
+								<form
+									method="POST"
+									action={act('deleteRecipe')}
+									use:enhance
+									class="mt-2 flex flex-col gap-2"
+								>
+									<input type="hidden" name="recipeId" value={r.recipeId} />
+									<p>
+										このレシピを削除します。付いているいいねと保存も一緒に消え、元に戻せません。投稿者には通知されません。Report
+										は記録として残ります。
+									</p>
+									<button
+										class="self-start rounded bg-red-700 px-3 py-1 text-sm font-medium text-white"
+										>削除を確定する</button
+									>
+								</form>
+							</details>
 						{/if}
 						{#if r.reportedUsername && r.targetState !== 'member_withdrawn'}
 							<form

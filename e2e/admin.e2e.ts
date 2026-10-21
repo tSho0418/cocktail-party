@@ -136,9 +136,14 @@ test('deleting the Recipe removes it but keeps the Report as a record (FR-074)',
 }) => {
 	const { note, recipeId } = await seedReport(browser, baseURL);
 	await page.goto('/admin');
-	await row(page, note).getByRole('button', { name: 'レシピを削除' }).click();
+	// Nothing is deleted until the confirmation is opened and confirmed.
+	await row(page, note).getByText('レシピを削除する').click();
+	await expect(row(page, note)).toContainText('投稿者には通知されません');
+	await expect(row(page, note)).toContainText('Report は記録として残ります');
+	expect((await page.request.get(`/recipes/${recipeId}`)).status()).toBe(200);
+	await row(page, note).getByRole('button', { name: '削除を確定する' }).click();
 	await expect(row(page, note)).toContainText('削除済みのレシピ');
-	await expect(row(page, note).getByRole('button', { name: 'レシピを削除' })).toHaveCount(0);
+	await expect(row(page, note).getByText('レシピを削除する')).toHaveCount(0);
 	expect((await page.request.get(`/recipes/${recipeId}`)).status()).toBe(404);
 	expect((await pool.query(`select 1 from report where detail = $1`, [note])).rowCount).toBe(1);
 });
