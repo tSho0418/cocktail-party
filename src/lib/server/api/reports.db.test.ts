@@ -89,6 +89,25 @@ describe('POST /api/recipes/:id/reports (FR-070/071)', () => {
 	});
 });
 
+describe('concurrent duplicate Reports (FR-071)', () => {
+	it('lets exactly one of two simultaneous POSTs through, the other is 409, never 500', async () => {
+		const author = await seedMember(uniq());
+		const a = await seedMember(uniq());
+		const id = await newRecipe(author);
+		const statuses = (
+			await Promise.all(
+				Array.from({ length: 4 }, () =>
+					call(a, 'POST', `/recipes/${id}/reports`, { reason: 'spam' })
+				)
+			)
+		)
+			.map((r) => r.status)
+			.sort();
+		expect(statuses).toEqual([201, 409, 409, 409]);
+		expect(await db.select().from(report).where(eq(report.recipeId, id))).toHaveLength(1);
+	});
+});
+
 describe('administrator routes (FR-072/073/075)', () => {
 	it('refuse signed-out callers and Members who are not Administrators', async () => {
 		const m = await seedMember(uniq());

@@ -9,29 +9,39 @@ import {
 import { listIngredientsWithAbv } from '#lib/server/services/ingredients/list.js';
 import { deleteRecipe } from '#lib/server/services/recipes/index.js';
 import {
+	REPORT_STATUSES,
 	listReports,
+	type ReportStatus,
 	listSuspendedMembers,
 	setMemberSuspension,
 	setReportStatus
 } from '#lib/server/services/reports/index.js';
 import { adminErrorMessage } from '#lib/report-messages.js';
+import { requireAdmin } from './require-admin';
 import type { Actions, PageServerLoad } from './$types';
 
-// The layout load has already refused anyone but an Administrator; the services check again.
-const actorOf = (locals: App.Locals) => ({
-	memberId: locals.member!.id,
-	isAdministrator: locals.member!.isAdministrator
-});
+// Reports shown at once. The page says so when the list was cut.
+const REPORT_LIMIT = 200;
 
-export const load: PageServerLoad = async ({ locals }) => {
-	const actor = actorOf(locals);
+// Default: unhandled Reports only, so old open ones never fall off a list full of handled ones.
+export const load: PageServerLoad = async ({ locals, url }) => {
+	const actor = requireAdmin(locals);
+	const param = url.searchParams.get('status');
+	const status: ReportStatus | 'all' =
+		param === 'all' ? 'all' : (REPORT_STATUSES.find((s) => s === param) ?? 'open');
 	const [reports, suspended, ingredients] = await Promise.all([
-		listReports(db, actor),
+		listReports(db, actor, {
+			status: status === 'all' ? undefined : status,
+			limit: REPORT_LIMIT + 1
+		}),
 		listSuspendedMembers(db, actor),
 		listIngredientsWithAbv(db)
 	]);
 	return {
-		reports: reports.ok ? reports.value : [],
+		status,
+		reports: reports.ok ? reports.value.slice(0, REPORT_LIMIT) : [],
+		reportsCut: reports.ok && reports.value.length > REPORT_LIMIT,
+		reportLimit: REPORT_LIMIT,
 		suspended: suspended.ok ? suspended.value : [],
 		ingredients
 	};
@@ -44,32 +54,37 @@ const abvOf = (s: string) => (s.trim() === '' ? NaN : Number(s));
 export const actions: Actions = {
 	// FR-072
 	setStatus: async ({ locals, request }) => {
+		const actor = requireAdmin(locals);
 		const data = await request.formData();
-		const r = await setReportStatus(db, actorOf(locals), text(data, 'id'), text(data, 'status'));
+		const r = await setReportStatus(db, actor, text(data, 'id'), text(data, 'status'));
 		if (!r.ok) return fail(400, { error: adminErrorMessage(r.error) });
 	},
 	// FR-074: the author is not notified; the Report stays as a record.
 	deleteRecipe: async ({ locals, request }) => {
+		const actor = requireAdmin(locals);
 		const data = await request.formData();
-		const r = await deleteRecipe(db, actorOf(locals), text(data, 'recipeId'));
+		const r = await deleteRecipe(db, actor, text(data, 'recipeId'));
 		if (!r.ok) return fail(400, { error: adminErrorMessage(r.error) });
 		await deleteUnreferencedPhotos(defaultStore, r.value.photoKeys);
 	},
 	// FR-075
 	suspend: async ({ locals, request }) => {
+		const actor = requireAdmin(locals);
 		const username = text(await request.formData(), 'username').trim();
-		const r = await setMemberSuspension(db, actorOf(locals), username, true);
+		const r = await setMemberSuspension(db, actor, username, true);
 		if (!r.ok) return fail(400, { error: adminErrorMessage(r.error) });
 	},
 	unsuspend: async ({ locals, request }) => {
+		const actor = requireAdmin(locals);
 		const username = text(await request.formData(), 'username').trim();
-		const r = await setMemberSuspension(db, actorOf(locals), username, false);
+		const r = await setMemberSuspension(db, actor, username, false);
 		if (!r.ok) return fail(400, { error: adminErrorMessage(r.error) });
 	},
 	// FR-013/076
 	createIngredient: async ({ locals, request }) => {
+		const actor = requireAdmin(locals);
 		const data = await request.formData();
-		const r = await createAlcoholicIngredient(actorOf(locals), {
+		const r = await createAlcoholicIngredient(actor, {
 			name: text(data, 'name'),
 			abvPercent: abvOf(text(data, 'abvPercent')),
 			isBaseSpirit: data.get('isBaseSpirit') === 'on'
@@ -78,12 +93,9 @@ export const actions: Actions = {
 	},
 	// FR-015/076
 	updateAbv: async ({ locals, request }) => {
+		const actor = requireAdmin(locals);
 		const data = await request.formData();
-		const r = await updateIngredientAbv(
-			actorOf(locals),
-			text(data, 'id'),
-			abvOf(text(data, 'abvPercent'))
-		);
+		const r = await updateIngredientAbv(actor, text(data, 'id'), abvOf(text(data, 'abvPercent')));
 		if (!r.ok) return fail(400, { error: adminErrorMessage(r.error) });
 	}
 };

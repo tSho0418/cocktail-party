@@ -22,8 +22,25 @@
 
 	<section class="mt-8" aria-labelledby="reports-heading">
 		<h2 id="reports-heading" class="text-lg font-bold">通報(Report)</h2>
+		<!-- eslint-disable svelte/no-navigation-without-resolve -- same page, only the query changes -->
+		<nav class="mt-2 flex gap-3 text-sm" aria-label="状態で絞り込む">
+			{#each [['open', '未対応'], ['resolved', '対応済み'], ['dismissed', '却下'], ['all', 'すべて']] as [value, label] (value)}
+				<a
+					href={resolve('/admin') + (value === 'open' ? '' : '?status=' + value)}
+					aria-current={data.status === value ? 'page' : undefined}
+					class={data.status === value ? 'font-bold underline' : 'text-gray-600 underline'}
+					>{label}</a
+				>
+			{/each}
+		</nav>
+		<!-- eslint-enable svelte/no-navigation-without-resolve -->
 		{#if data.reports.length === 0}
 			<p class="mt-2 text-sm text-gray-600">通報はありません。</p>
+		{/if}
+		{#if data.reportsCut}
+			<p class="mt-2 text-sm text-gray-600">
+				新しい順に {data.reportLimit} 件まで表示しています。古い通報は状態で絞り込んでください。
+			</p>
 		{/if}
 		<ul class="mt-2 space-y-3">
 			{#each data.reports as r (r.id)}
