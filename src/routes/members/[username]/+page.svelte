@@ -25,7 +25,7 @@
 
 <svelte:head><title>{profile.username} | Cocktail Party</title></svelte:head>
 
-<!-- eslint-disable svelte/no-navigation-without-resolve -- /recipes/[id] is built by another branch (not in the typed route list yet); tab and paging links only change the query -->
+<!-- eslint-disable svelte/no-navigation-without-resolve -- tab and paging links only change the query -->
 <main class="mx-auto max-w-3xl p-6">
 	<header class="flex items-start gap-4">
 		{#if profile.iconUrl}
@@ -80,7 +80,7 @@
 			<ul class="grid grid-cols-2 gap-4 sm:grid-cols-3">
 				{#each data.list.items as r (r.id)}
 					<li>
-						<a href="/recipes/{r.id}" class="block">
+						<a href={resolve('/recipes/[id]', { id: r.id })} class="block">
 							{#if r.photoUrl}
 								<img
 									src={r.photoUrl}

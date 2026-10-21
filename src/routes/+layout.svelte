@@ -46,8 +46,7 @@
 							class={link}>マイページ</a
 						>
 						{#if data.member.isAdministrator}
-							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- /admin is built by another branch (not in the typed route list yet) -->
-							<a href="/admin" class={link}>管理</a>
+							<a href={resolve('/admin')} class={link}>管理</a>
 						{/if}
 					{:else}
 						<a href={resolve('/(auth)/welcome')} class={link}>Username を決める</a>
@@ -66,10 +65,8 @@
 				aria-label="フッター"
 				class="mx-auto flex max-w-5xl flex-wrap gap-x-4 gap-y-1 px-4 py-4 text-sm text-gray-600"
 			>
-				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- /terms is built by another branch -->
-				<a href="/terms" class="underline">利用規約</a>
-				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- /privacy is built by another branch -->
-				<a href="/privacy" class="underline">プライバシーポリシー</a>
+				<a href={resolve('/terms')} class="underline">利用規約</a>
+				<a href={resolve('/privacy')} class="underline">プライバシーポリシー</a>
 			</nav>
 		</footer>
 	</div>
