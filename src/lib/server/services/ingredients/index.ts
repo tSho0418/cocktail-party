@@ -135,8 +135,9 @@ type AbvChange = { ingredient: Ingredient; recomputed: number; discardedOverride
  * (it holds its Recipe while it share-locks the Ingredient). Once the Ingredient row is ours no
  * Recipe can start using it, so the Recipes read then are the ones to recompute. A Recipe whose
  * edit added the Ingredient and committed after the first lock is not among the rows held, and
- * locking it now would be out of order: the transaction ends and starts over, with that Recipe
- * in the first set.
+ * locking it now would be out of order: `changeAbv` ends its transaction without writing, and
+ * the next transaction holds that Recipe from the start. It repeats once for every such edit
+ * that commits in that gap, so how often depends on the concurrent writers, not on a limit here.
  */
 export async function updateIngredientAbv(
 	actor: Actor,
@@ -148,84 +149,93 @@ export async function updateIngredientAbv(
 	if (!isValidAbv(abvPercent)) return { ok: false, error: 'invalid_abv' };
 	if (!isUuid(ingredientId)) return { ok: false, error: 'not_found' };
 
-	const result = await db.transaction(async (tx): Promise<Result<AbvChange> | null> => {
-		// Lock affected Recipes in id order so concurrent ABV edits cannot deadlock.
-		const using = () =>
-			tx
-				.select({ id: recipe.id, abvOverride: recipe.abvOverride })
-				.from(recipe)
-				.where(
-					inArray(
-						recipe.id,
-						tx
-							.select({ id: recipeIngredient.recipeId })
-							.from(recipeIngredient)
-							.where(eq(recipeIngredient.ingredientId, ingredientId))
-					)
-				)
-				.orderBy(asc(recipe.id));
-		const held = new Set((await using().for('update')).map((r) => r.id));
+	for (;;) {
+		const result = await db.transaction((tx) => changeAbv(tx, ingredientId, abvPercent));
+		if (result) return result;
+	}
+}
 
-		const [current] = await tx
-			.select()
-			.from(ingredient)
-			.where(eq(ingredient.id, ingredientId))
-			.for('update');
-		if (!current) return { ok: false, error: 'not_found' };
-		if (current.isBaseSpirit && abvPercent === 0) {
-			return { ok: false, error: 'base_requires_alcohol' };
-		}
-
-		const recipes = await using();
-		if (recipes.some((r) => !held.has(r.id))) return null;
-
-		const [updated] = await tx
-			.update(ingredient)
-			.set({ abvPercent })
-			.where(eq(ingredient.id, ingredientId))
-			.returning();
-		if (recipes.length === 0) {
-			return { ok: true, value: { ingredient: updated, recomputed: 0, discardedOverrides: [] } };
-		}
-
-		const items = await tx
-			.select({
-				recipeId: recipeIngredient.recipeId,
-				id: recipeIngredient.ingredientId,
-				mixRatio: recipeIngredient.mixRatio,
-				abvPercent: ingredient.abvPercent,
-				isBaseSpirit: ingredient.isBaseSpirit
-			})
-			.from(recipeIngredient)
-			.innerJoin(ingredient, eq(ingredient.id, recipeIngredient.ingredientId))
+/** One transaction of `updateIngredientAbv`; null (nothing written) means start a new one. */
+async function changeAbv(
+	tx: Tx,
+	ingredientId: string,
+	abvPercent: number
+): Promise<Result<AbvChange> | null> {
+	// Lock affected Recipes in id order so concurrent ABV edits cannot deadlock.
+	const recipesUsing = () =>
+		tx
+			.select({ id: recipe.id, abvOverride: recipe.abvOverride })
+			.from(recipe)
 			.where(
 				inArray(
-					recipeIngredient.recipeId,
-					recipes.map((r) => r.id)
+					recipe.id,
+					tx
+						.select({ id: recipeIngredient.recipeId })
+						.from(recipeIngredient)
+						.where(eq(recipeIngredient.ingredientId, ingredientId))
 				)
-			);
+			)
+			.orderBy(asc(recipe.id));
+	const held = new Set((await recipesUsing().for('update')).map((r) => r.id));
 
-		const discardedOverrides: string[] = [];
-		for (const r of recipes) {
-			const derived = recomputeDerived(
-				items.filter((i) => i.recipeId === r.id),
-				r.abvOverride
-			);
-			if (derived.overrideDiscarded) discardedOverrides.push(r.id);
-			await tx
-				.update(recipe)
-				.set({
-					autoAbv: derived.autoAbv,
-					hasAlcohol: derived.hasAlcohol,
-					abvOverride: derived.abvOverride,
-					updatedAt: sql`${recipe.updatedAt}` // not an author edit; keep it (and skip $onUpdate)
-				})
-				.where(eq(recipe.id, r.id));
-		}
-		return {
-			ok: true,
-			value: { ingredient: updated, recomputed: recipes.length, discardedOverrides }
-		};
-	});
-	return result ?? updateIngredientAbv(actor, ingredientId, abvPercent);
+	const [current] = await tx
+		.select()
+		.from(ingredient)
+		.where(eq(ingredient.id, ingredientId))
+		.for('update');
+	if (!current) return { ok: false, error: 'not_found' };
+	if (current.isBaseSpirit && abvPercent === 0) {
+		return { ok: false, error: 'base_requires_alcohol' };
+	}
+
+	const recipes = await recipesUsing();
+	if (recipes.some((r) => !held.has(r.id))) return null;
+
+	const [updated] = await tx
+		.update(ingredient)
+		.set({ abvPercent })
+		.where(eq(ingredient.id, ingredientId))
+		.returning();
+	if (recipes.length === 0) {
+		return { ok: true, value: { ingredient: updated, recomputed: 0, discardedOverrides: [] } };
+	}
+
+	const items = await tx
+		.select({
+			recipeId: recipeIngredient.recipeId,
+			id: recipeIngredient.ingredientId,
+			mixRatio: recipeIngredient.mixRatio,
+			abvPercent: ingredient.abvPercent,
+			isBaseSpirit: ingredient.isBaseSpirit
+		})
+		.from(recipeIngredient)
+		.innerJoin(ingredient, eq(ingredient.id, recipeIngredient.ingredientId))
+		.where(
+			inArray(
+				recipeIngredient.recipeId,
+				recipes.map((r) => r.id)
+			)
+		);
+
+	const discardedOverrides: string[] = [];
+	for (const r of recipes) {
+		const derived = recomputeDerived(
+			items.filter((i) => i.recipeId === r.id),
+			r.abvOverride
+		);
+		if (derived.overrideDiscarded) discardedOverrides.push(r.id);
+		await tx
+			.update(recipe)
+			.set({
+				autoAbv: derived.autoAbv,
+				hasAlcohol: derived.hasAlcohol,
+				abvOverride: derived.abvOverride,
+				updatedAt: sql`${recipe.updatedAt}` // not an author edit; keep it (and skip $onUpdate)
+			})
+			.where(eq(recipe.id, r.id));
+	}
+	return {
+		ok: true,
+		value: { ingredient: updated, recomputed: recipes.length, discardedOverrides }
+	};
 }
