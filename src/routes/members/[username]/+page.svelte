@@ -94,7 +94,10 @@
 							<span class="mt-1 block text-sm font-medium">{r.title}</span>
 						</a>
 						<span class="text-xs text-gray-600">
-							{#if data.tab === 'saved' && r.ownerUsername}by {r.ownerUsername} ·
+							{#if data.tab === 'saved' && r.ownerUsername}by <a
+									href={resolve('/members/[username]', { username: r.ownerUsername })}
+									class="underline">{r.ownerUsername}</a
+								> ·
 							{/if}♡ {r.likeCount}
 						</span>
 					</li>
