@@ -1,8 +1,12 @@
 <script lang="ts">
 	import { ACCEPT, downsizeImage, type DownsizeError } from '#lib/client/downsize-image.js';
 
-	let { label = '写真を選ぶ', onselect }: { label?: string; onselect: (blob: Blob) => void } =
-		$props();
+	// `disabled`: the caller is still busy with an earlier pick (e.g. uploading it).
+	let {
+		label = '写真を選ぶ',
+		disabled = false,
+		onselect
+	}: { label?: string; disabled?: boolean; onselect: (blob: Blob) => void } = $props();
 
 	const MESSAGES: Record<DownsizeError, string> = {
 		unsupported_format: 'JPEG、PNG、WebP の画像を選んでください。',
@@ -38,7 +42,7 @@
 	{id}
 	type="file"
 	accept={ACCEPT.join(',')}
-	disabled={busy}
+	disabled={busy || disabled}
 	aria-describedby={error ? `${id}-error` : undefined}
 	{onchange}
 />

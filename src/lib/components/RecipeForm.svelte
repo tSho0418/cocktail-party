@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { tick } from 'svelte';
 	import { createApiClient } from '#lib/api.js';
 	import IngredientPicker from '#lib/components/IngredientPicker.svelte';
 	import PhotoPicker from '#lib/components/PhotoPicker.svelte';
@@ -39,11 +41,19 @@
 	nextRowId += startValues.ingredients.reduce((max, r) => Math.max(max, r.rowId), 0);
 
 	let values = $state<FormValues>(startValues);
+	// Steps are plain strings, so each gets an id here to keep its DOM node (and focus) when it moves.
+	let nextStepKey = 1;
+	let stepKeys = $state(startValues.steps.map(() => nextStepKey++));
 	let submitted = $state(false);
+	// Set once a save succeeds and stays set: the button stays off until the detail page replaces the
+	// form, so a second click or Enter cannot publish a duplicate Recipe (FR-001).
 	let submitting = $state(false);
+	let savedId = $state<string>();
 	let formError = $state<string>();
 	let uploads = $state(0);
 	let uploadError = $state<string>();
+	let formErrorEl = $state<HTMLElement>();
+	let errorSummaryEl = $state<HTMLElement>();
 
 	const errors = $derived(validateForm(values));
 	const preview = $derived(previewAlcohol(values.ingredients, values.abvOverride));
@@ -56,6 +66,36 @@
 	});
 
 	const fmt = (n: number) => `${n.toFixed(1)}%`;
+
+	// NFR-005: previews are described by the Recipe's title once it is typed.
+	const title = $derived(values.title.trim());
+	const mainPhotoAlt = $derived(title ? `${title} の完成写真` : '完成写真のプレビュー');
+	const extraPhotoAlt = (i: number) => (title ? `${title} の写真 ${i + 1}` : `追加の写真 ${i + 1}`);
+
+	// Messages for the summary a failed submit moves focus to.
+	const errorMessages = $derived.by(() => {
+		const e = errors;
+		const names = new Map(values.ingredients.map((r) => [r.rowId, r.ingredient.name]));
+		return [
+			e.title,
+			e.description,
+			e.mainPhoto,
+			e.ingredients,
+			...Object.entries(e.rows).map(([id, m]) => `${names.get(Number(id))}: ${m}`),
+			e.steps,
+			...Object.entries(e.stepRows).map(([i, m]) => `ステップ ${Number(i) + 1}: ${m}`),
+			e.abvOverride
+		].filter((m): m is string => !!m);
+	});
+
+	// Blob URLs of chosen previews live until the photo is replaced, removed or the form goes away.
+	const revoke = (photo: PhotoRef | null | undefined) => {
+		if (photo?.url?.startsWith('blob:')) URL.revokeObjectURL(photo.url);
+	};
+	$effect(() => () => {
+		revoke(values.mainPhoto);
+		values.extraPhotos.forEach(revoke);
+	});
 
 	// FR-030: PhotoPicker shrinks; the server re-encodes (FR-031). Keys of the stored pair come back.
 	async function upload(blob: Blob): Promise<PhotoRef | null> {
@@ -86,47 +126,96 @@
 
 	async function setMain(blob: Blob) {
 		const photo = await upload(blob);
-		if (photo) values.mainPhoto = photo;
+		if (!photo) return;
+		revoke(values.mainPhoto);
+		values.mainPhoto = photo;
 	}
 
 	async function addExtra(blob: Blob) {
 		const photo = await upload(blob);
-		if (photo && values.extraPhotos.length < MAX_EXTRA_PHOTOS) values.extraPhotos.push(photo);
+		if (!photo) return;
+		if (values.extraPhotos.length < MAX_EXTRA_PHOTOS) values.extraPhotos.push(photo);
+		else revoke(photo);
+	}
+
+	function removeExtra(i: number) {
+		revoke(values.extraPhotos[i]);
+		values.extraPhotos.splice(i, 1);
 	}
 
 	function addIngredient(ingredient: IngredientOption) {
 		if (values.ingredients.length >= MAX_INGREDIENTS) return;
-		values.ingredients.push({ rowId: nextRowId++, ingredient, mixRatio: '' });
+		const rowId = nextRowId++;
+		values.ingredients.push({ rowId, ingredient, mixRatio: '' });
+		// The suggestion that was clicked disappears with the list; the ratio is what is needed next.
+		void tick().then(() => document.getElementById(`ratio-${rowId}`)?.focus());
 	}
 
-	function move<T>(list: T[], from: number, to: number) {
-		if (to < 0 || to >= list.length) return;
+	const shift = <T,>(list: T[], from: number, to: number) =>
 		list.splice(to, 0, ...list.splice(from, 1));
+
+	/** Moves an item; focus follows it, on the same arrow or, at the end of the list, the other one. */
+	async function move(kind: 'ingredient' | 'step', i: number, to: number) {
+		const length = kind === 'ingredient' ? values.ingredients.length : values.steps.length;
+		if (to < 0 || to >= length) return;
+		let key: number;
+		if (kind === 'ingredient') {
+			key = values.ingredients[i].rowId;
+			shift(values.ingredients, i, to);
+		} else {
+			key = stepKeys[i];
+			shift(values.steps, i, to);
+			shift(stepKeys, i, to);
+		}
+		const dir = to < i ? 'up' : 'down';
+		await tick();
+		const button = (d: string) =>
+			document.querySelector<HTMLButtonElement>(`[data-move="${kind}-${key}-${d}"]`);
+		const same = button(dir);
+		(same && !same.disabled ? same : button(dir === 'up' ? 'down' : 'up'))?.focus();
+	}
+
+	function addStep() {
+		values.steps.push('');
+		stepKeys.push(nextStepKey++);
+	}
+
+	function removeStep(i: number) {
+		values.steps.splice(i, 1);
+		stepKeys.splice(i, 1);
 	}
 
 	async function submit(e: SubmitEvent) {
 		e.preventDefault();
 		submitted = true;
 		formError = undefined;
-		if (hasErrors(errors) || uploads > 0 || submitting) return;
+		if (submitting) return;
+		if (hasErrors(errors)) {
+			await tick();
+			errorSummaryEl?.focus();
+			return;
+		}
+		if (uploads > 0) return;
 		submitting = true;
-		let savedId: string | undefined;
 		try {
 			const json = toPayload(values);
 			const res = recipeId
 				? await client.api.recipes[':id'].$put({ param: { id: recipeId }, json })
 				: await client.api.recipes.$post({ json });
-			const body = await res.json();
-			if (res.ok && 'id' in body) savedId = body.id;
-			else formError = apiErrorMessage('error' in body ? body.error : undefined);
+			const body = await res.json().catch(() => null);
+			if (res.ok && body && 'id' in body) savedId = body.id;
+			else formError = apiErrorMessage(body && 'error' in body ? body.error : undefined);
 		} catch {
 			formError = '保存できませんでした。通信状況を確認してください。';
-		} finally {
-			submitting = false;
 		}
-		// The detail page (/recipes/[id]) is a separate route, so `resolve()` has no typed route for it here.
-		// eslint-disable-next-line svelte/no-navigation-without-resolve
-		if (savedId) await goto(`/recipes/${savedId}`);
+		if (!savedId) {
+			// Only a failed save frees the button; a saved one stays locked while navigating.
+			submitting = false;
+			await tick();
+			formErrorEl?.focus();
+			return;
+		}
+		await goto(resolve('/recipes/[id]', { id: savedId }));
 	}
 
 	const input = 'rounded border border-gray-300 px-3 py-2';
@@ -156,6 +245,7 @@
 			id="description"
 			bind:value={values.description}
 			rows="3"
+			aria-invalid={submitted && errors.description ? 'true' : undefined}
 			aria-describedby={submitted && errors.description ? 'description-error' : undefined}
 			class={input}></textarea>
 		<p class="text-xs text-gray-500">
@@ -175,16 +265,13 @@
 		<div class="flex flex-col gap-2">
 			<p class="text-sm font-medium">完成写真(メイン・必須)</p>
 			{#if values.mainPhoto?.url}
-				<img
-					src={values.mainPhoto.url}
-					alt="完成写真のプレビュー"
-					class="h-40 w-40 rounded object-cover"
-				/>
+				<img src={values.mainPhoto.url} alt={mainPhotoAlt} class="h-40 w-40 rounded object-cover" />
 			{:else if values.mainPhoto}
 				<p class="text-sm text-gray-600">写真は選択済みです(プレビューは表示できません)。</p>
 			{/if}
 			<PhotoPicker
 				label={values.mainPhoto ? '完成写真を変更する' : '完成写真を選ぶ'}
+				disabled={uploads > 0}
 				onselect={setMain}
 			/>
 			{#if submitted && errors.mainPhoto}
@@ -198,18 +285,14 @@
 				{#each values.extraPhotos as photo, i (photo.key)}
 					<li class="flex flex-col items-start gap-1">
 						{#if photo.url}
-							<img
-								src={photo.url}
-								alt="追加の写真 {i + 1}"
-								class="h-24 w-24 rounded object-cover"
-							/>
+							<img src={photo.url} alt={extraPhotoAlt(i)} class="h-24 w-24 rounded object-cover" />
 						{:else}
 							<span class="text-sm text-gray-600">追加の写真 {i + 1}</span>
 						{/if}
 						<button
 							type="button"
 							class={smallButton}
-							onclick={() => values.extraPhotos.splice(i, 1)}
+							onclick={() => removeExtra(i)}
 							aria-label="追加の写真 {i + 1} を削除"
 						>
 							削除
@@ -218,7 +301,7 @@
 				{/each}
 			</ul>
 			{#if values.extraPhotos.length < MAX_EXTRA_PHOTOS}
-				<PhotoPicker label="写真を追加する" onselect={addExtra} />
+				<PhotoPicker label="写真を追加する" disabled={uploads > 0} onselect={addExtra} />
 			{/if}
 		</div>
 		<p role="status" aria-live="polite" class="text-sm text-gray-600">
@@ -260,7 +343,8 @@
 								type="button"
 								class={smallButton}
 								disabled={i === 0}
-								onclick={() => move(values.ingredients, i, i - 1)}
+								data-move="ingredient-{row.rowId}-up"
+								onclick={() => move('ingredient', i, i - 1)}
 								aria-label="{row.ingredient.name} を上へ"
 							>
 								↑
@@ -269,7 +353,8 @@
 								type="button"
 								class={smallButton}
 								disabled={i === values.ingredients.length - 1}
-								onclick={() => move(values.ingredients, i, i + 1)}
+								data-move="ingredient-{row.rowId}-down"
+								onclick={() => move('ingredient', i, i + 1)}
 								aria-label="{row.ingredient.name} を下へ"
 							>
 								↓
@@ -306,30 +391,32 @@
 
 	<section class="flex flex-col gap-2" aria-labelledby="abv-heading">
 		<h2 id="abv-heading" class="text-lg font-semibold">度数(Alcohol Content)</h2>
-		{#if preview.autoAbv === null}
-			<p class="text-sm text-gray-600">材料と割合を入れると、度数の目安を自動で計算します。</p>
-		{:else if !preview.hasAlcohol}
+		{#if !preview.hasAlcohol && preview.autoAbv !== null}
 			<p data-testid="abv-effective">
 				<span class="text-xl font-bold">{fmt(0)}</span>
 				<span class="text-sm text-gray-600">
 					酒類を含まないため 0% に固定されます(ノンアルコール)。</span
 				>
 			</p>
+		{:else if preview.effectiveAbv === null}
+			<!-- Also while an Ingredient with alcohol still has no valid Mix Ratio: a partial sum would read too low. -->
+			<p class="text-sm text-gray-600">材料と割合を入れると、度数の目安を自動で計算します。</p>
 		{:else}
 			<p data-testid="abv-effective">
-				<span class="text-xl font-bold">{fmt(preview.effectiveAbv ?? preview.autoAbv)}</span>
+				<span class="text-xl font-bold">{fmt(preview.effectiveAbv)}</span>
 				<span class="text-sm text-gray-600">
 					{preview.override.state === 'valid' ? '投稿者による修正値' : '自動計算の目安'}
 				</span>
 			</p>
-			{#if preview.override.state === 'valid'}
+			{#if preview.override.state === 'valid' && preview.autoAbv !== null}
 				<p class="text-sm text-gray-600" data-testid="abv-auto">
 					自動計算の値: {fmt(preview.autoAbv)}(目安・氷の溶けは考慮しません)
 				</p>
 			{:else}
 				<p class="text-xs text-gray-500">氷の溶けは考慮しない目安です。</p>
 			{/if}
-
+		{/if}
+		{#if preview.hasAlcohol}
 			<div class="flex flex-wrap items-center gap-2">
 				<label for="abv-override" class="text-sm">度数を自分で修正する(任意)</label>
 				<input
@@ -338,7 +425,9 @@
 					inputmode="decimal"
 					autocomplete="off"
 					aria-invalid={errors.abvOverride ? 'true' : undefined}
-					aria-describedby="abv-override-help"
+					aria-describedby={errors.abvOverride
+						? 'abv-override-error abv-override-help'
+						: 'abv-override-help'}
 					class="{input} w-24"
 				/>
 				<span aria-hidden="true">%</span>
@@ -352,7 +441,9 @@
 				0% を超え、材料の最高度数 {preview.maxIngredientAbv}% 以下。材料を変えても修正値は残ります。
 			</p>
 			{#if errors.abvOverride}
-				<p role="alert" class="text-sm text-red-700">{errors.abvOverride}</p>
+				<p id="abv-override-error" role="alert" class="text-sm text-red-700">
+					{errors.abvOverride}
+				</p>
 			{/if}
 		{/if}
 	</section>
@@ -360,7 +451,7 @@
 	<fieldset class="flex flex-col gap-3">
 		<legend class="text-lg font-semibold">手順(最大{MAX_STEPS}ステップ)</legend>
 		<ol class="flex flex-col gap-3">
-			{#each values.steps as step, i (i)}
+			{#each values.steps as step, i (stepKeys[i])}
 				{@const stepError = submitted ? errors.stepRows[i] : undefined}
 				<li class="flex flex-col gap-1">
 					<label for="step-{i}" class="text-sm font-medium">ステップ {i + 1}</label>
@@ -379,7 +470,8 @@
 							type="button"
 							class={smallButton}
 							disabled={i === 0}
-							onclick={() => move(values.steps, i, i - 1)}
+							data-move="step-{stepKeys[i]}-up"
+							onclick={() => move('step', i, i - 1)}
 							aria-label="ステップ {i + 1} を上へ"
 						>
 							↑
@@ -388,7 +480,8 @@
 							type="button"
 							class={smallButton}
 							disabled={i === values.steps.length - 1}
-							onclick={() => move(values.steps, i, i + 1)}
+							data-move="step-{stepKeys[i]}-down"
+							onclick={() => move('step', i, i + 1)}
 							aria-label="ステップ {i + 1} を下へ"
 						>
 							↓
@@ -397,7 +490,7 @@
 							type="button"
 							class={smallButton}
 							disabled={values.steps.length === 1}
-							onclick={() => values.steps.splice(i, 1)}
+							onclick={() => removeStep(i)}
 							aria-label="ステップ {i + 1} を削除"
 						>
 							削除
@@ -410,7 +503,7 @@
 			{/each}
 		</ol>
 		{#if values.steps.length < MAX_STEPS}
-			<button type="button" class="{smallButton} self-start" onclick={() => values.steps.push('')}>
+			<button type="button" class="{smallButton} self-start" onclick={addStep}>
 				ステップを追加
 			</button>
 		{/if}
@@ -420,12 +513,29 @@
 	</fieldset>
 
 	{#if formError}
-		<p role="alert" class="rounded bg-red-50 p-3 text-sm text-red-700">{formError}</p>
+		<p
+			bind:this={formErrorEl}
+			tabindex="-1"
+			role="alert"
+			class="rounded bg-red-50 p-3 text-sm text-red-700"
+		>
+			{formError}
+		</p>
 	{/if}
 	{#if submitted && hasErrors(errors) && !formError}
-		<p role="alert" class="rounded bg-red-50 p-3 text-sm text-red-700">
-			入力内容を確認してください。
-		</p>
+		<div
+			bind:this={errorSummaryEl}
+			tabindex="-1"
+			role="alert"
+			class="rounded bg-red-50 p-3 text-sm text-red-700"
+		>
+			<p>入力内容を確認してください。</p>
+			<ul class="mt-1 list-disc pl-5">
+				{#each errorMessages as message (message)}
+					<li>{message}</li>
+				{/each}
+			</ul>
+		</div>
 	{/if}
 
 	<button
@@ -434,6 +544,14 @@
 	>
 		{recipeId ? '変更を保存する' : '投稿する'}
 	</button>
+	{#if savedId}
+		<p role="status" class="text-sm text-gray-600">
+			保存しました。移動しています…
+			<a href={resolve('/recipes/[id]', { id: savedId })} class="underline"
+				>移動しない場合はこちら</a
+			>
+		</p>
+	{/if}
 	{#if !recipeId}
 		<p class="-mt-6 text-xs text-gray-500">投稿するとすぐに公開されます。</p>
 	{/if}
