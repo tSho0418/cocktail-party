@@ -15,7 +15,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const recipe = await getRecipeDetail(db, params.id);
 	if (!recipe) error(404, 'レシピが見つかりません');
 	const m = locals.member;
-	const isOwner = !!m && recipe.owner.id === m.id;
+	// Same basis as the delete action: only a Member with a Username counts as the owner.
+	const isOwner = !!m?.username && recipe.owner.id === m.id;
 	// Initial Like/Save state comes from here so the buttons do not flicker after hydration.
 	// getReactions is null only if the Recipe vanished (or its Member was suspended) in between.
 	const reactions = (await getReactions(db, recipe.id, m?.username ? m.id : null)) ?? {

@@ -154,7 +154,7 @@
 					>
 				{/if}
 				{#if data.canDelete}
-					<details>
+					<details open={!!form?.deleteError}>
 						<summary class="cursor-pointer text-sm text-red-700 underline">削除する</summary>
 						<form method="POST" action="?/delete" class="mt-3 flex flex-col gap-3">
 							<p class="text-sm">

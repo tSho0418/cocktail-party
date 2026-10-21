@@ -18,7 +18,6 @@ test.afterAll(async () => {
 	await pool.query(`delete from recipe where member_id = any($1)`, [memberIds]);
 	await pool.query(`delete from member where id = any($1)`, [memberIds]);
 	await pool.query(`delete from ingredient where name = $1`, [gin]);
-	await pool.end();
 });
 
 /** Signs `context` in as a fresh Member (replacing any earlier session cookie). */

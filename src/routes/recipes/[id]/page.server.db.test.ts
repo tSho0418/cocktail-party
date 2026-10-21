@@ -124,6 +124,14 @@ describe('detail load: what the viewer may do (FR-008/055/056/074)', () => {
 	it('lets an Administrator delete but not edit', async () => {
 		expect(await view(admin)).toMatchObject({ canEdit: false, canDelete: true });
 	});
+
+	it('does not treat the owner as owner while they have no Username', async () => {
+		expect(await view({ ...owner, username: null })).toMatchObject({
+			isOwner: false,
+			canEdit: false,
+			canDelete: false
+		});
+	});
 });
 
 describe('?/delete action (FR-008/074)', () => {
@@ -164,6 +172,13 @@ describe('?/delete action (FR-008/074)', () => {
 		await seed();
 		vi.mocked(deleteObjects).mockClear();
 		expect(await del(null)).toMatchObject({ status: 401 });
+		expect(await del({ ...stranger, username: null })).toMatchObject({ status: 401 });
+		expect(
+			await (actions.delete as (e: unknown) => Promise<unknown>)({
+				locals: { member: stranger },
+				params: { id: 'not-a-uuid' }
+			})
+		).toMatchObject({ status: 404 });
 		expect(await del(stranger)).toMatchObject({ status: 403 });
 		expect(await exists()).toBe(true);
 		expect(deleteObjects).not.toHaveBeenCalled();
@@ -171,6 +186,10 @@ describe('?/delete action (FR-008/074)', () => {
 
 	it('deletes for the owner with its Likes, Saves and photos, then goes to the top', async () => {
 		vi.mocked(deleteObjects).mockClear();
+		// Keys go to storage only after the commit: the row is already gone by then.
+		vi.mocked(deleteObjects).mockImplementationOnce(async () => {
+			expect(await exists()).toBe(false);
+		});
 		const owner = { id: author.id, username: `au_${tag}`, isAdministrator: false };
 		const e = await del(owner).catch((x) => x);
 		expect(isRedirect(e) && e.location).toBe('/');

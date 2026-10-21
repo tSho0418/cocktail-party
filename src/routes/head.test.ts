@@ -40,8 +40,9 @@ describe('top page head (NFR-007)', () => {
 	});
 });
 
-const recipeHead = (
-	over: { title?: string; description?: string; mainPhotoUrl?: string | null } = {}
+const renderRecipe = (
+	over: { title?: string; description?: string; mainPhotoUrl?: string | null } = {},
+	extra: { data?: Record<string, unknown>; form?: unknown } = {}
 ) => {
 	state.url = new URL('http://localhost/recipes/abc?utm=1');
 	const recipe = {
@@ -70,10 +71,25 @@ const recipeHead = (
 		signedIn: false,
 		isOwner: false,
 		canEdit: false,
-		canDelete: false
+		canDelete: false,
+		...extra.data
 	};
-	return render(RecipePage, { props: { data } as never }).head;
+	return render(RecipePage, { props: { data, form: extra.form } as never });
 };
+const recipeHead = (over: Parameters<typeof renderRecipe>[0] = {}) => renderRecipe(over).head;
+
+describe('Recipe detail delete form', () => {
+	it('opens the confirmation and shows the error after a refused delete, without JavaScript', () => {
+		const canDelete = { isOwner: true, canEdit: true, canDelete: true };
+		const failed = renderRecipe(
+			{},
+			{ data: canDelete, form: { deleteError: 'この操作はできません。' } }
+		);
+		expect(failed.body).toMatch(/<details[^>]* open/);
+		expect(failed.body).toContain('この操作はできません。');
+		expect(renderRecipe({}, { data: canDelete }).body).not.toMatch(/<details[^>]* open/);
+	});
+});
 
 describe('Recipe detail head (FR-080)', () => {
 	beforeEach(() => {

@@ -188,7 +188,7 @@
 					<p class="px-2 pb-2 text-xs text-gray-500">
 						{#if recipe.ownerUsername}<a
 								href={resolve('/members/[username]', { username: recipe.ownerUsername })}
-								class="underline">{recipe.ownerUsername}</a
+								class="inline-block py-1 underline">{recipe.ownerUsername}</a
 							>{/if}
 						Like {recipe.likeCount}
 					</p>
