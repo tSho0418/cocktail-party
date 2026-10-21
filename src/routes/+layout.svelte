@@ -34,12 +34,13 @@
 				{:else}
 					{#if data.member.username}
 						<a href={resolve('/recipes/new')} class={link}>レシピを投稿</a>
-						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- only adds the saved tab query to a resolved path -->
+						<!-- eslint-disable svelte/no-navigation-without-resolve -- only adds the saved tab query to a resolved path -->
 						<a
 							href={resolve('/members/[username]', { username: data.member.username }) +
 								'?tab=saved'}
 							class={link}>保存したレシピ</a
 						>
+						<!-- eslint-enable svelte/no-navigation-without-resolve -->
 						<a
 							href={resolve('/members/[username]', { username: data.member.username })}
 							class={link}>マイページ</a
