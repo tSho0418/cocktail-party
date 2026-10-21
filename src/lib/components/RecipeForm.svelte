@@ -138,9 +138,34 @@
 		else revoke(photo);
 	}
 
+	/**
+	 * After a row is removed, focus goes to the row that took its place (else the one before it, else
+	 * the control that adds one) instead of falling to <body>. Call after the splice; rows carry
+	 * `data-focus="<kind>-<index>"`, add controls `data-add="<kind>"` (NFR-005).
+	 */
+	async function focusAfterRemove(
+		kind: 'ingredient' | 'step' | 'photo',
+		i: number,
+		length: number
+	) {
+		await tick();
+		const row = [i, i - 1].find((n) => n >= 0 && n < length);
+		const target =
+			row === undefined
+				? document.querySelector<HTMLElement>(`[data-add="${kind}"]`)
+				: document.querySelector<HTMLElement>(`[data-focus="${kind}-${row}"]`);
+		(target?.matches('input, button, textarea') ? target : target?.querySelector('input'))?.focus();
+	}
+
 	function removeExtra(i: number) {
 		revoke(values.extraPhotos[i]);
 		values.extraPhotos.splice(i, 1);
+		void focusAfterRemove('photo', i, values.extraPhotos.length);
+	}
+
+	function removeIngredient(i: number) {
+		values.ingredients.splice(i, 1);
+		void focusAfterRemove('ingredient', i, values.ingredients.length);
 	}
 
 	function addIngredient(ingredient: IngredientOption) {
@@ -183,6 +208,7 @@
 	function removeStep(i: number) {
 		values.steps.splice(i, 1);
 		stepKeys.splice(i, 1);
+		void focusAfterRemove('step', i, values.steps.length);
 	}
 
 	async function submit(e: SubmitEvent) {
@@ -294,6 +320,7 @@
 							class={smallButton}
 							onclick={() => removeExtra(i)}
 							aria-label="追加の写真 {i + 1} を削除"
+							data-focus="photo-{i}"
 						>
 							削除
 						</button>
@@ -301,7 +328,9 @@
 				{/each}
 			</ul>
 			{#if values.extraPhotos.length < MAX_EXTRA_PHOTOS}
-				<PhotoPicker label="写真を追加する" disabled={uploads > 0} onselect={addExtra} />
+				<div class="contents" data-add="photo">
+					<PhotoPicker label="写真を追加する" disabled={uploads > 0} onselect={addExtra} />
+				</div>
 			{/if}
 		</div>
 		<p role="status" aria-live="polite" class="text-sm text-gray-600">
@@ -338,6 +367,7 @@
 								aria-invalid={rowError ? 'true' : undefined}
 								aria-describedby={rowError ? `ratio-${row.rowId}-error` : undefined}
 								class="{input} w-24"
+								data-focus="ingredient-{i}"
 							/>
 							<button
 								type="button"
@@ -362,7 +392,7 @@
 							<button
 								type="button"
 								class={smallButton}
-								onclick={() => values.ingredients.splice(i, 1)}
+								onclick={() => removeIngredient(i)}
 								aria-label="{row.ingredient.name} を削除"
 							>
 								削除
@@ -380,10 +410,12 @@
 		{/if}
 
 		{#if values.ingredients.length < MAX_INGREDIENTS}
-			<IngredientPicker
-				onselect={addIngredient}
-				excludeIds={values.ingredients.map((r) => r.ingredient.id)}
-			/>
+			<div class="contents" data-add="ingredient">
+				<IngredientPicker
+					onselect={addIngredient}
+					excludeIds={values.ingredients.map((r) => r.ingredient.id)}
+				/>
+			</div>
 		{:else}
 			<p class="text-sm text-gray-600">材料は {MAX_INGREDIENTS} 個までです。</p>
 		{/if}
@@ -461,7 +493,8 @@
 						rows="2"
 						aria-invalid={stepError ? 'true' : undefined}
 						aria-describedby={stepError ? `step-${i}-error` : undefined}
-						class={input}></textarea>
+						class={input}
+						data-focus="step-{i}"></textarea>
 					<div class="flex items-center gap-2">
 						<span class="text-xs text-gray-500">
 							{[...step.trim()].length} / {MAX_STEP_LENGTH} 字
@@ -503,7 +536,7 @@
 			{/each}
 		</ol>
 		{#if values.steps.length < MAX_STEPS}
-			<button type="button" class="{smallButton} self-start" onclick={addStep}>
+			<button type="button" class="{smallButton} self-start" data-add="step" onclick={addStep}>
 				ステップを追加
 			</button>
 		{/if}

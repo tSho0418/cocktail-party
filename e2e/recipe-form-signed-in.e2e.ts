@@ -243,3 +243,74 @@ test('the photo picker waits for an upload to finish, so the first pick stays th
 	release();
 	await expect(page.getByLabel('完成写真を変更する')).toBeEnabled();
 });
+
+const focusedTag = (page: Page) => page.evaluate(() => document.activeElement?.tagName);
+
+test('deleting an Ingredient row moves focus to the next row, else the previous, else the search (NFR-005)', async ({
+	page
+}) => {
+	await page.goto('/recipes/new');
+	await addIngredient(page, gin, '1');
+	await addIngredient(page, tonic, '2');
+	const ratios = page.getByRole('textbox', { name: '割合' });
+
+	await page.getByRole('button', { name: `${gin} を削除` }).click();
+	await expect(ratios).toHaveCount(1);
+	await expect(ratios.first()).toBeFocused(); // the next row took its place
+
+	await addIngredient(page, gin, '3');
+	await page.getByRole('button', { name: `${gin} を削除` }).click();
+	await expect(ratios).toHaveCount(1);
+	await expect(ratios.first()).toBeFocused(); // the last row went: the previous one
+
+	await page.getByRole('button', { name: `${tonic} を削除` }).click();
+	await expect(ratios).toHaveCount(0);
+	await expect(page.getByLabel('材料を探す')).toBeFocused();
+	expect(await focusedTag(page)).not.toBe('BODY');
+});
+
+test('deleting a step moves focus to the next step, else the previous; the last one cannot be deleted (NFR-005)', async ({
+	page
+}) => {
+	await page.goto('/recipes/new');
+	const add = page.getByRole('button', { name: 'ステップを追加' });
+	await add.click();
+	await add.click();
+	for (const n of [1, 2, 3])
+		await page.getByRole('textbox', { name: `ステップ ${n}` }).fill(`手順${n}`);
+
+	await page.getByRole('button', { name: 'ステップ 2 を削除' }).click();
+	await expect(page.getByRole('textbox', { name: 'ステップ 2' })).toHaveValue('手順3');
+	await expect(page.getByRole('textbox', { name: 'ステップ 2' })).toBeFocused();
+
+	await page.getByRole('button', { name: 'ステップ 2 を削除' }).click();
+	await expect(page.getByRole('textbox', { name: 'ステップ 1' })).toBeFocused();
+	await expect(page.getByRole('textbox', { name: /ステップ/ })).toHaveCount(1);
+	await expect(page.getByRole('button', { name: 'ステップ 1 を削除' })).toBeDisabled();
+	expect(await focusedTag(page)).not.toBe('BODY');
+});
+
+test('deleting an extra photo moves focus to the next photo, else the previous, else the add control (NFR-005)', async ({
+	page
+}) => {
+	await stubUploads(page);
+	await page.goto('/recipes/new');
+	await pickPhoto(page, '完成写真を選ぶ');
+	await expect(page.getByLabel('完成写真を変更する')).toBeEnabled();
+	for (const n of [1, 2, 3]) {
+		await expect(page.getByLabel('写真を追加する')).toBeEnabled();
+		await pickPhoto(page, '写真を追加する');
+		await expect(page.getByRole('button', { name: `追加の写真 ${n} を削除` })).toBeVisible();
+	}
+
+	await page.getByRole('button', { name: '追加の写真 2 を削除' }).click();
+	await expect(page.getByRole('button', { name: '追加の写真 3 を削除' })).toHaveCount(0);
+	await expect(page.getByRole('button', { name: '追加の写真 2 を削除' })).toBeFocused();
+
+	await page.getByRole('button', { name: '追加の写真 2 を削除' }).click();
+	await expect(page.getByRole('button', { name: '追加の写真 1 を削除' })).toBeFocused();
+
+	await page.getByRole('button', { name: '追加の写真 1 を削除' }).click();
+	await expect(page.getByLabel('写真を追加する')).toBeFocused();
+	expect(await focusedTag(page)).not.toBe('BODY');
+});
