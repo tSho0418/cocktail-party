@@ -138,9 +138,40 @@
 		else revoke(photo);
 	}
 
+	/**
+	 * After a row is removed, focus goes to the row that took its place (else the one before it, else
+	 * the control that adds one) instead of falling to <body>. Call after the splice. Ingredient and
+	 * photo rows carry `data-focus="<kind>-<index>"` (steps: `step-<index>` id), add controls
+	 * `data-add="<kind>"`. A disabled add control (a photo upload is running) cannot take focus, so
+	 * the section heading, `data-heading="<kind>"`, does (NFR-005).
+	 */
+	async function focusAfterRemove(
+		kind: 'ingredient' | 'step' | 'photo',
+		i: number,
+		length: number
+	) {
+		await tick();
+		const row = [i, i - 1].find((n) => n >= 0 && n < length);
+		const target =
+			row === undefined
+				? document.querySelector<HTMLElement>(`[data-add="${kind}"]`)
+				: kind === 'step'
+					? document.getElementById(`step-${row}`)
+					: document.querySelector<HTMLElement>(`[data-focus="${kind}-${row}"]`);
+		(target?.matches('input, button, textarea') ? target : target?.querySelector('input'))?.focus();
+		if (document.activeElement === document.body)
+			document.querySelector<HTMLElement>(`[data-heading="${kind}"]`)?.focus();
+	}
+
 	function removeExtra(i: number) {
 		revoke(values.extraPhotos[i]);
 		values.extraPhotos.splice(i, 1);
+		void focusAfterRemove('photo', i, values.extraPhotos.length);
+	}
+
+	function removeIngredient(i: number) {
+		values.ingredients.splice(i, 1);
+		void focusAfterRemove('ingredient', i, values.ingredients.length);
 	}
 
 	function addIngredient(ingredient: IngredientOption) {
@@ -183,6 +214,7 @@
 	function removeStep(i: number) {
 		values.steps.splice(i, 1);
 		stepKeys.splice(i, 1);
+		void focusAfterRemove('step', i, values.steps.length);
 	}
 
 	async function submit(e: SubmitEvent) {
@@ -280,7 +312,9 @@
 		</div>
 
 		<div class="flex flex-col gap-2">
-			<p class="text-sm font-medium">追加の写真(任意・{MAX_EXTRA_PHOTOS}枚まで)</p>
+			<p class="text-sm font-medium" tabindex="-1" data-heading="photo">
+				追加の写真(任意・{MAX_EXTRA_PHOTOS}枚まで)
+			</p>
 			<ul class="flex flex-wrap gap-3">
 				{#each values.extraPhotos as photo, i (photo.key)}
 					<li class="flex flex-col items-start gap-1">
@@ -294,6 +328,7 @@
 							class={smallButton}
 							onclick={() => removeExtra(i)}
 							aria-label="追加の写真 {i + 1} を削除"
+							data-focus="photo-{i}"
 						>
 							削除
 						</button>
@@ -301,7 +336,9 @@
 				{/each}
 			</ul>
 			{#if values.extraPhotos.length < MAX_EXTRA_PHOTOS}
-				<PhotoPicker label="写真を追加する" disabled={uploads > 0} onselect={addExtra} />
+				<div class="contents" data-add="photo">
+					<PhotoPicker label="写真を追加する" disabled={uploads > 0} onselect={addExtra} />
+				</div>
 			{/if}
 		</div>
 		<p role="status" aria-live="polite" class="text-sm text-gray-600">
@@ -338,6 +375,7 @@
 								aria-invalid={rowError ? 'true' : undefined}
 								aria-describedby={rowError ? `ratio-${row.rowId}-error` : undefined}
 								class="{input} w-24"
+								data-focus="ingredient-{i}"
 							/>
 							<button
 								type="button"
@@ -362,7 +400,7 @@
 							<button
 								type="button"
 								class={smallButton}
-								onclick={() => values.ingredients.splice(i, 1)}
+								onclick={() => removeIngredient(i)}
 								aria-label="{row.ingredient.name} を削除"
 							>
 								削除
@@ -380,10 +418,12 @@
 		{/if}
 
 		{#if values.ingredients.length < MAX_INGREDIENTS}
-			<IngredientPicker
-				onselect={addIngredient}
-				excludeIds={values.ingredients.map((r) => r.ingredient.id)}
-			/>
+			<div class="contents" data-add="ingredient">
+				<IngredientPicker
+					onselect={addIngredient}
+					excludeIds={values.ingredients.map((r) => r.ingredient.id)}
+				/>
+			</div>
 		{:else}
 			<p class="text-sm text-gray-600">材料は {MAX_INGREDIENTS} 個までです。</p>
 		{/if}
@@ -503,7 +543,7 @@
 			{/each}
 		</ol>
 		{#if values.steps.length < MAX_STEPS}
-			<button type="button" class="{smallButton} self-start" onclick={addStep}>
+			<button type="button" class="{smallButton} self-start" data-add="step" onclick={addStep}>
 				ステップを追加
 			</button>
 		{/if}

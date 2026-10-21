@@ -104,7 +104,11 @@ function validateRecipeInput(input: RecipeInput): Result<Required<RecipeInput>, 
 	});
 }
 
-/** Ingredient rows in input order. FOR SHARE makes a concurrent ABV edit (FR-015) wait for us. */
+/**
+ * Ingredient rows in input order. FOR SHARE makes a concurrent ABV edit (FR-015) wait for us.
+ * Call it after the Recipe and photo upload locks: the ABV edit takes its Ingredient after its
+ * Recipes (README, Lock order).
+ */
 async function loadIngredients(tx: Db, items: RecipeInput['ingredients']) {
 	const rows = await tx
 		.select({

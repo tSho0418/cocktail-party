@@ -3,6 +3,7 @@
 // service does), so every caller gets the same rule.
 import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import { member, recipe, report } from '#lib/server/db/schema.js';
+import { decodeTimeCursor, encodeTimeCursor } from '#lib/server/services/cursor.js';
 import { isUuid, type Actor, type Db } from '#lib/server/services/recipes/index.js';
 
 export const REPORT_REASONS = ['inappropriate_photo', 'plagiarism', 'spam', 'other'] as const;
@@ -88,13 +89,21 @@ export type ReportRow = {
 
 export type AdminError = 'forbidden' | 'not_found';
 
-/** FR-073: newest first, optionally only one status. */
+export const REPORT_PAGE_SIZE = 50;
+
+/** FR-073: newest first, optionally only one status, keyset-paginated by (created_at, id). */
 export async function listReports(
 	db: Db,
 	actor: Actor,
-	opts: { status?: ReportStatus; limit?: number } = {}
-): Promise<Result<ReportRow[], 'forbidden'>> {
+	opts: { status?: ReportStatus; cursor?: string | null; limit?: number } = {}
+): Promise<
+	Result<{ items: ReportRow[]; nextCursor: string | null }, 'forbidden' | 'invalid_query'>
+> {
 	if (!actor.isAdministrator) return fail('forbidden');
+	const limit = opts.limit ?? REPORT_PAGE_SIZE;
+	const cursor = opts.cursor ? decodeTimeCursor(opts.cursor) : null;
+	if (!Number.isInteger(limit) || limit < 1 || (opts.cursor && !cursor))
+		return fail('invalid_query');
 	const reporter = db
 		.select({ id: member.id, username: member.username })
 		.from(member)
@@ -106,6 +115,7 @@ export async function listReports(
 			reason: report.reason,
 			detail: report.detail,
 			createdAt: report.createdAt,
+			createdAtText: sql<string>`${report.createdAt}::text`,
 			targetState: report.targetState,
 			recipeId: report.recipeId,
 			recipeTitle: recipe.title,
@@ -118,10 +128,23 @@ export async function listReports(
 		.leftJoin(recipe, eq(recipe.id, report.recipeId))
 		.leftJoin(reporter, eq(reporter.id, report.reporterId))
 		.leftJoin(member, eq(member.id, report.reportedMemberId))
-		.where(opts.status ? eq(report.status, opts.status) : undefined)
+		.where(
+			and(
+				opts.status ? eq(report.status, opts.status) : undefined,
+				cursor
+					? sql`(${report.createdAt}, ${report.id}) < (${cursor[0]}::timestamptz, ${cursor[1]}::uuid)`
+					: undefined
+			)
+		)
 		.orderBy(desc(report.createdAt), desc(report.id))
-		.limit(opts.limit ?? 200);
-	return ok(rows);
+		.limit(limit + 1);
+	const page = rows.slice(0, limit);
+	const last = page.at(-1);
+	return ok({
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars -- only the cursor needs the text form
+		items: page.map(({ createdAtText: _, ...row }) => row),
+		nextCursor: rows.length > limit && last ? encodeTimeCursor(last.createdAtText, last.id) : null
+	});
 }
 
 /** FR-072. */
