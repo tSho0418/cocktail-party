@@ -22,16 +22,17 @@ const cookiesWith = (jar: Record<string, string>) => {
 };
 
 // Mocks the SvelteKit `page` state the gate reads.
-vi.mock('$app/state', () => ({ page: { url: new URL('http://localhost/recipes/1?x=1') } }));
+const state = vi.hoisted(() => ({ url: new URL('http://localhost/recipes/1?x=1') }));
+vi.mock('$app/state', () => ({ page: state }));
 
 const html = (ageGateOpen: boolean) =>
-	render(Layout, { props: { data: { ageGateOpen }, children: body } as never }).body;
+	render(Layout, { props: { data: { ageGateOpen, member: null }, children: body } as never }).body;
 
 describe('Age Gate on the server', () => {
 	it('renders the page body together with the gate while the gate is open (FR-062)', () => {
 		const out = html(true);
 		expect(out).toContain('ジントニックの作り方');
-		expect(out).toMatch(/<div style="display: contents" inert=""><main>/);
+		expect(out).toMatch(/<div style="display: contents" inert="">.*<main>/);
 		expect(out).toContain('data-age-gate');
 		expect(out).toContain('role="dialog"');
 		expect(out).toContain('name="redirectTo" value="/recipes/1?x=1"');
@@ -44,10 +45,14 @@ describe('Age Gate on the server', () => {
 	});
 
 	it('opens the gate for a first visit and closes it with the cookie', () => {
-		const first = load({ cookies: cookiesWith({}).cookies } as never);
-		const returning = load({ cookies: cookiesWith({ [AGE_GATE_COOKIE]: '1' }).cookies } as never);
-		expect(first).toEqual({ ageGateOpen: true });
-		expect(returning).toEqual({ ageGateOpen: false });
+		const locals = { member: null };
+		const first = load({ cookies: cookiesWith({}).cookies, locals } as never);
+		const returning = load({
+			cookies: cookiesWith({ [AGE_GATE_COOKIE]: '1' }).cookies,
+			locals
+		} as never);
+		expect(first).toMatchObject({ ageGateOpen: true });
+		expect(returning).toMatchObject({ ageGateOpen: false });
 	});
 
 	it('consent sets a 30-day cookie and redirects back', async () => {
@@ -60,8 +65,50 @@ describe('Age Gate on the server', () => {
 		expect(res).toMatchObject({ status: 303, location: '/recipes/1?x=1' });
 		expect(set).toHaveLength(1);
 		expect(set[0].name).toBe(AGE_GATE_COOKIE);
-		expect(set[0].opts.maxAge).toBe(AGE_GATE_MAX_AGE_SECONDS);
-		expect(set[0].opts.path).toBe('/');
+		expect(set[0].opts).toEqual({
+			path: '/',
+			maxAge: AGE_GATE_MAX_AGE_SECONDS,
+			httpOnly: true,
+			sameSite: 'lax'
+		});
+	});
+
+	it('shows navigation by sign-in state, and footer links always', () => {
+		const nav = (member: { username: string | null; isAdministrator: boolean } | null) =>
+			render(Layout, { props: { data: { ageGateOpen: false, member }, children: body } as never })
+				.body;
+		const out = nav(null);
+		expect(out).toContain('ログイン');
+		expect(out).not.toContain('マイページ');
+		expect(out).toContain('href="/terms"');
+		expect(out).toContain('href="/privacy"');
+
+		const member = nav({ username: 'alice', isAdministrator: false });
+		expect(member).toContain('href="/members/alice"');
+		expect(member).toContain('href="/members/alice?tab=saved"');
+		expect(member).toContain('href="/recipes/new"');
+		expect(member).toContain('href="/logout"');
+		expect(member).not.toContain('href="/admin"');
+		expect(nav({ username: 'alice', isAdministrator: true })).toContain('href="/admin"');
+
+		const fresh = nav({ username: null, isAdministrator: false });
+		expect(fresh).toContain('href="/welcome"');
+		expect(fresh).not.toContain('href="/recipes/new"');
+		expect(nav({ username: null, isAdministrator: true })).not.toContain('href="/admin"');
+	});
+
+	it('keeps the declined view out of search indexes (NFR-007)', () => {
+		const head = (url: string) => {
+			state.url = new URL(url);
+			return render(Layout, {
+				props: { data: { ageGateOpen: true, member: null }, children: body } as never
+			}).head;
+		};
+		expect(head('http://localhost/recipes/1?age-gate=declined')).toContain(
+			'<meta name="robots" content="noindex"'
+		);
+		expect(head('http://localhost/recipes/1')).not.toContain('noindex');
+		state.url = new URL('http://localhost/recipes/1?x=1');
 	});
 
 	it('does not redirect off-site', async () => {

@@ -275,6 +275,12 @@ describe('profile (FR-054)', () => {
 			expect(await updateProfile(tx, alice.memberId, { bio: 'あ'.repeat(200) })).toMatchObject({
 				ok: true
 			});
+			// A browser sends newlines as CRLF but its maxlength counts one: 198 letters + 2 newlines = 200.
+			const multiline = `${'あ'.repeat(98)}\r\n${'あ'.repeat(99)}\r\nあ`;
+			expect(await updateProfile(tx, alice.memberId, { bio: multiline })).toMatchObject({
+				ok: true
+			});
+			expect((await getProfile(tx, 'alice', null))?.bio).toBe(multiline.replaceAll('\r\n', '\n'));
 			expect(await updateProfile(tx, alice.memberId, { iconKey: 'recipe/x/list.webp' })).toEqual({
 				ok: false,
 				error: 'icon_key_invalid'

@@ -258,7 +258,7 @@ export type UpdateProfileError =
 const UNIQUE_VIOLATION = '23505';
 
 /**
- * Changes Username (FR-053), bio (FR-054, at most 200 characters; blank clears it) and/or icon
+ * Changes Username (FR-053), bio (FR-054, at most 200 characters; blank clears it; CRLF counts and is stored as one newline) and/or icon
  * in one transaction: any rejected field leaves all of them unchanged. Fields left undefined are
  * untouched; `iconKey: null` removes the icon; an empty string is an invalid key. A new icon must be an upload (`kind = 'member'`) of
  * this Member (the key it already has stays valid). An icon that is replaced or removed has its
@@ -272,7 +272,8 @@ export async function updateProfile(
 ): Promise<
 	{ ok: true; value: { releasedKeys: string[] } } | { ok: false; error: UpdateProfileError }
 > {
-	const bio = input.bio === undefined ? undefined : input.bio.trim() || null;
+	const bio =
+		input.bio === undefined ? undefined : input.bio.replace(/\r\n?/g, '\n').trim() || null;
 	if (input.username !== undefined && !USERNAME_PATTERN.test(input.username))
 		return { ok: false, error: 'username_invalid' };
 	if (bio && charLength(bio) > BIO_MAX) return { ok: false, error: 'bio_too_long' };

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import type { PageProps } from './$types';
 
@@ -18,8 +19,9 @@
 		name="description"
 		content="カクテルのレシピと写真を共有する Web SNS。材料や手持ちのお酒からレシピを探せます。"
 	/>
-	<!-- Search results and later pages are not landing pages (NFR-007 covers Recipe detail only). -->
-	{#if data.filtered || data.hasCursor || data.form.sort !== 'new'}
+	<!-- Only the bare `/` is the landing page (NFR-007 covers Recipe detail only): search results,
+	     later pages and any query string, even an empty form submission, repeat it. -->
+	{#if page.url.search !== ''}
 		<meta name="robots" content="noindex" />
 	{/if}
 </svelte:head>
