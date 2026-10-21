@@ -512,6 +512,28 @@ describe('deleteRecipe', () => {
 });
 
 describe('photo ownership (FR-007)', () => {
+	it('lets a Recipe from before upload records resend its storePhoto-shaped keys, and rejects older key shapes (ADR 0006)', () =>
+		isolated(async (tx) => {
+			const alice = await seedMember(tx, 'alice');
+			const i = await seedIngredients(tx);
+			const key = await upload(tx, alice);
+			const id = await make(tx, alice, input('旧', [[i.gin, 1]], { mainPhotoKey: key }));
+			await tx.delete(photoUpload); // as if the Recipe predated the upload records
+			const edit = () =>
+				updateRecipe(tx, alice, id, input('新', [[i.gin, 1]], { mainPhotoKey: key }));
+
+			expect((await edit()).ok).toBe(true);
+			await tx.update(recipe).set({ mainPhotoKey: 'photos/old-main' }).where(eq(recipe.id, id));
+			expect(
+				await updateRecipe(
+					tx,
+					alice,
+					id,
+					input('新', [[i.gin, 1]], { mainPhotoKey: 'photos/old-main' })
+				)
+			).toEqual({ ok: false, error: 'photo_key_invalid' });
+		}));
+
 	it("rejects another Member's still-unattached upload and one attached to another Recipe", () =>
 		isolated(async (tx) => {
 			const alice = await seedMember(tx, 'alice');

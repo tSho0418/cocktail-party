@@ -1,16 +1,22 @@
 import { asc, inArray, sql } from 'drizzle-orm';
-import { photoUpload, recipe, recipePhoto } from '#lib/server/db/schema.js';
+import { member, photoUpload, recipe, recipePhoto } from '#lib/server/db/schema.js';
 import type { OwnerKind } from '#lib/server/services/images/index.js';
 import type { Db } from './recipes';
 
 // Photo keys are `<kind>/<uuid>/{list,detail}.webp` (storePhoto); the uuid identifies an upload.
-const RECIPE_PHOTO_KEY =
-	/^recipe\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(list|detail)\.webp$/;
+const PHOTO_KEY =
+	/^(recipe|member)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(list|detail)\.webp$/;
 
-/** The upload id of a Recipe photo key, or null when the key is not one storePhoto produces. */
-export const recipePhotoId = (key: string) => RECIPE_PHOTO_KEY.exec(key)?.[1] ?? null;
+/** The upload id of a `kind` photo key, or null when the key is not one storePhoto produces for it. */
+export function photoId(key: string, kind: OwnerKind) {
+	const m = PHOTO_KEY.exec(key);
+	return m?.[1] === kind ? m[2] : null;
+}
 
-const filesOf = (id: string) => [`recipe/${id}/list.webp`, `recipe/${id}/detail.webp`];
+const filesOf = (kind: OwnerKind, id: string) => [
+	`${kind}/${id}/list.webp`,
+	`${kind}/${id}/detail.webp`
+];
 
 /** Records who uploaded a photo; POST /api/photos calls it once the derivatives are stored. */
 export async function recordPhotoUpload(db: Db, memberId: string, kind: OwnerKind, id: string) {
@@ -23,8 +29,8 @@ export async function recordPhotoUpload(db: Db, memberId: string, kind: OwnerKin
  * attaches or releases the same photo waits here, so the reference check in
  * `releaseUnreferenced` and the removal of the upload row cannot interleave with it.
  */
-export async function lockPhotos(tx: Db, keys: string[]) {
-	const ids = [...new Set(keys.flatMap((k) => recipePhotoId(k) ?? []))];
+export async function lockPhotos(tx: Db, kind: OwnerKind, keys: string[]) {
+	const ids = [...new Set(keys.flatMap((k) => photoId(k, kind) ?? []))];
 	const rows =
 		ids.length === 0
 			? []
@@ -36,29 +42,34 @@ export async function lockPhotos(tx: Db, keys: string[]) {
 					.for('update');
 	return {
 		ids,
-		/** Every key is a Recipe photo `memberId` uploaded (and has not been released). */
+		/** Every key is a `kind` photo `memberId` uploaded (and has not been released). */
 		ownedBy: (memberId: string, keys: string[]) =>
 			keys.every((k) => {
-				const row = rows.find((r) => r.id === recipePhotoId(k));
-				return row?.memberId === memberId && row.kind === 'recipe';
+				const row = rows.find((r) => r.id === photoId(k, kind));
+				return row?.memberId === memberId && row.kind === kind;
 			})
 	};
 }
 
 /**
- * Of the (locked) upload ids, those no Recipe references any more: their upload rows are
- * deleted, so the photo can never be attached again, and their object keys returned for the
- * caller to delete from storage after commit. Run it after the Recipe write, in the same
- * transaction.
+ * Of the (locked) upload ids of `kind`, those nothing references any more (no Recipe photo, or
+ * no Member icon): their upload rows are deleted, so the photo can never be attached again, and
+ * their object keys returned for the caller to delete from storage after commit. Run it after
+ * the write, in the same transaction.
  */
-export async function releaseUnreferenced(tx: Db, ids: string[]) {
+export async function releaseUnreferenced(tx: Db, kind: OwnerKind, ids: string[]) {
 	if (ids.length === 0) return [];
-	const files = ids.flatMap(filesOf);
-	const used = await tx.execute<{ key: string }>(sql`
+	const files = ids.flatMap((id) => filesOf(kind, id));
+	const used =
+		kind === 'recipe'
+			? await tx.execute<{ key: string }>(sql`
 		select ${recipe.mainPhotoKey} as key from ${recipe} where ${inArray(recipe.mainPhotoKey, files)}
-		union select ${recipePhoto.photoKey} from ${recipePhoto} where ${inArray(recipePhoto.photoKey, files)}`);
-	const usedIds = new Set(used.rows.map((r) => recipePhotoId(r.key)));
+		union select ${recipePhoto.photoKey} from ${recipePhoto} where ${inArray(recipePhoto.photoKey, files)}`)
+			: await tx.execute<{ key: string }>(
+					sql`select ${member.iconKey} as key from ${member} where ${inArray(member.iconKey, files)}`
+				);
+	const usedIds = new Set(used.rows.map((r) => photoId(r.key, kind)));
 	const free = ids.filter((id) => !usedIds.has(id));
 	if (free.length > 0) await tx.delete(photoUpload).where(inArray(photoUpload.id, free));
-	return free.flatMap(filesOf);
+	return free.flatMap((id) => filesOf(kind, id));
 }

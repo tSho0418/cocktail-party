@@ -1,7 +1,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { defaultStore } from '#lib/server/api/photos.js';
 import { db } from '#lib/server/db/index.js';
-import { deleteUnreferencedPhotos } from '#lib/server/services/images/cleanup.js';
+import { deleteObjects } from '#lib/server/services/images/delete-objects.js';
 import { publicUrl } from '#lib/server/services/images/public-url.js';
 import {
 	getProfile,
@@ -38,8 +38,7 @@ export const actions: Actions = {
 
 		const result = await updateProfile(db, locals.member.id, { username, bio, iconKey });
 		if (!result.ok) return fail(400, { username, bio, error: MESSAGES[result.error] });
-		if (result.value.replacedIconKey)
-			await deleteUnreferencedPhotos(defaultStore, [result.value.replacedIconKey]);
+		await deleteObjects(defaultStore, result.value.releasedKeys);
 		redirect(303, `/members/${username}`);
 	}
 };

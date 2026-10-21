@@ -11,6 +11,7 @@ import {
 	type RecipeInput,
 	type SearchParams
 } from '#lib/server/services/recipes/index.js';
+import { deleteObjects } from '#lib/server/services/images/delete-objects.js';
 import type { ImageStore } from '#lib/server/services/images/index.js';
 import {
 	actorOf,
@@ -73,23 +74,6 @@ function parseSearch(query: Record<string, string | string[]>): SearchParams | n
 		cursor: q.cursor || null,
 		limit: num(q.limit)
 	};
-}
-
-/**
- * Deletes the objects of photos whose uploads were released in the write's transaction (nothing
- * can reference them any more). Best effort: the write is committed, so building the store
- * (missing R2_* env) or any delete failing must not fail the request.
- */
-async function deleteObjects(store: () => ImageStore, keys: string[]) {
-	if (keys.length === 0) return;
-	try {
-		const s = store();
-		const results = await Promise.allSettled(keys.map((k) => s.delete(k)));
-		for (const r of results)
-			if (r.status === 'rejected') console.error('photo cleanup failed', r.reason);
-	} catch (e) {
-		console.error('photo cleanup failed', e);
-	}
 }
 
 export const recipesRoute = ({ store }: { store: () => ImageStore }) =>
