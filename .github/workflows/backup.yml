@@ -1,0 +1,76 @@
+name: Backup
+
+# NFR-003: dump the Neon database with pg_dump, put it in a Cloudflare R2 bucket that is NOT the
+# Photo bucket, and delete dumps older than 14 days.
+# Required in the `production` environment:
+#   DATABASE_URL                  Neon connection string. Use the direct (non-pooled) host: pg_dump
+#                                 needs a session, not PgBouncer's transaction mode.
+#   BACKUP_R2_ACCOUNT_ID, BACKUP_R2_ACCESS_KEY_ID, BACKUP_R2_SECRET_ACCESS_KEY, BACKUP_R2_BUCKET
+#                                 an S3 API token with Object Read & Write on the backup bucket only.
+# Disabled for now (CD postponed, like deploy.yml): runs only when started by hand from the Actions tab.
+# To enable the daily run, add under `on:`:
+#   schedule:
+#     - cron: '17 18 * * *'   # 03:17 JST
+# (GitHub's cron is UTC and can be delayed; scheduled runs use the default branch.)
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      BUCKET: ${{ secrets.BACKUP_R2_BUCKET }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_ENDPOINT_URL: https://${{ secrets.BACKUP_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      # R2 does not accept the default checksum headers of recent AWS CLI versions.
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+      RETENTION_DAYS: 14
+    steps:
+      # The runner's pg_dump must not be older than the server (Neon runs Postgres 17).
+      - name: Install postgresql-client-17
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Dump
+        run: |
+          set -euo pipefail
+          NAME="cocktail-party-$(date -u +%Y%m%dT%H%M%SZ).dump"
+          echo "NAME=$NAME" >> "$GITHUB_ENV"
+          # Custom format: compressed, and restorable selectively with pg_restore.
+          /usr/lib/postgresql/17/bin/pg_dump --format=custom --no-owner --no-privileges --file "$NAME" "$DATABASE_URL"
+          # A dump pg_restore cannot read must fail the run, not become the newest "backup".
+          /usr/lib/postgresql/17/bin/pg_restore --list "$NAME" > /dev/null
+          ls -l "$NAME"
+
+      - name: Upload
+        run: aws s3 cp "$NAME" "s3://$BUCKET/$NAME" --only-show-errors
+
+      # Runs after the upload, so a failing dump never empties the bucket. The date is in the key.
+      - name: Delete dumps older than 14 days
+        run: |
+          set -euo pipefail
+          CUTOFF="cocktail-party-$(date -u -d "-$RETENTION_DAYS days" +%Y%m%dT%H%M%SZ).dump"
+          aws s3api list-objects-v2 --bucket "$BUCKET" --prefix cocktail-party- --query 'Contents[].Key' --output text \
+            | tr '\t' '\n' | grep '^cocktail-party-.*\.dump$' | sort | while read -r key; do
+              if [[ "$key" < "$CUTOFF" ]]; then
+                echo "delete $key"
+                aws s3api delete-object --bucket "$BUCKET" --key "$key"
+              fi
+            done

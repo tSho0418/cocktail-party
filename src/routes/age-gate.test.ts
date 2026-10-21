@@ -44,10 +44,26 @@ describe('Age Gate on the server', () => {
 	});
 
 	it('opens the gate for a first visit and closes it with the cookie', () => {
-		const first = load({ cookies: cookiesWith({}).cookies } as never);
-		const returning = load({ cookies: cookiesWith({ [AGE_GATE_COOKIE]: '1' }).cookies } as never);
+		const first = load({
+			cookies: cookiesWith({}).cookies,
+			url: new URL('http://localhost/')
+		} as never);
+		const returning = load({
+			cookies: cookiesWith({ [AGE_GATE_COOKIE]: '1' }).cookies,
+			url: new URL('http://localhost/')
+		} as never);
 		expect(first).toEqual({ ageGateOpen: true });
 		expect(returning).toEqual({ ageGateOpen: false });
+	});
+
+	it('keeps the terms and privacy pages open to a visitor who has not consented', () => {
+		for (const path of ['/terms', '/privacy']) {
+			const out = load({
+				cookies: cookiesWith({}).cookies,
+				url: new URL(`http://localhost${path}`)
+			} as never);
+			expect(out).toEqual({ ageGateOpen: false });
+		}
 	});
 
 	it('consent sets a 30-day cookie and redirects back', async () => {
