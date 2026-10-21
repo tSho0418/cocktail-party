@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
+	import { enhance } from '$app/forms';
+	import { REPORT_REASON_LABELS } from '#lib/report-messages.js';
 	import type { PageProps } from './$types';
 
-	let { data }: PageProps = $props();
+	let { data, form }: PageProps = $props();
 	const recipe = $derived(data.recipe);
 
 	const abv = (n: number) => `${n.toFixed(1)}%`;
@@ -121,4 +123,45 @@
 			</section>
 		{/if}
 	</article>
+
+	{#if data.canReport}
+		<section class="mt-10 border-t border-gray-200 pt-4" aria-labelledby="report-heading">
+			{#if form?.reported}
+				<p role="status" class="text-sm text-gray-700">
+					通報を受け付けました。ありがとうございます。
+				</p>
+			{:else}
+				<details>
+					<summary id="report-heading" class="cursor-pointer text-sm text-gray-600 underline">
+						このレシピを通報する
+					</summary>
+					<form method="POST" action="?/report" use:enhance class="mt-3 flex flex-col gap-3">
+						<fieldset class="flex flex-col gap-1">
+							<legend class="text-sm font-medium">理由</legend>
+							{#each Object.entries(REPORT_REASON_LABELS) as [value, label] (value)}
+								<label class="text-sm">
+									<input type="radio" name="reason" {value} required />
+									{label}
+								</label>
+							{/each}
+						</fieldset>
+						<label class="flex flex-col gap-1 text-sm font-medium">
+							補足(任意・200字まで)
+							<textarea
+								name="detail"
+								maxlength="200"
+								rows="3"
+								class="rounded border border-gray-300 px-3 py-2 font-normal"></textarea>
+						</label>
+						{#if form?.reportError}
+							<p role="alert" class="text-sm text-red-700">{form.reportError}</p>
+						{/if}
+						<button class="self-start rounded bg-gray-900 px-4 py-2 text-sm font-medium text-white">
+							通報する
+						</button>
+					</form>
+				</details>
+			{/if}
+		</section>
+	{/if}
 </main>

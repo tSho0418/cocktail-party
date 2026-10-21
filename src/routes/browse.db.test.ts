@@ -23,7 +23,7 @@ const list = async (search: string) =>
 		typeof loadList
 	>[0])) as unknown as ListData;
 const detail = async (id: string) =>
-	(await loadDetail({ params: { id } } as Parameters<
+	(await loadDetail({ params: { id }, locals: { member: null } } as Parameters<
 		typeof loadDetail
 	>[0])) as unknown as DetailData;
 
