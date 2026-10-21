@@ -10,7 +10,8 @@ const PHOTO_KEY =
  * Deletes the photo pairs behind `keys` (Recipe photos or Member icons) that nothing references
  * any more; for after a committed withdrawal or icon change. A pair (`list.webp` + `detail.webp`)
  * goes only when neither file is still used. Best effort: never throws, because the data change
- * it follows is already committed. Keys that are not storePhoto's output are ignored.
+ * it follows is already committed; each key it fails to delete is logged. Keys that are not
+ * storePhoto's output are ignored.
  */
 export async function deleteUnreferencedPhotos(
 	store: () => ImageStore,
@@ -27,13 +28,16 @@ export async function deleteUnreferencedPhotos(
 			union select ${member.iconKey} from ${member} where ${inArray(member.iconKey, files)}`);
 		const usedPrefixes = new Set(used.rows.map((r) => PHOTO_KEY.exec(r.key)?.[1]));
 		const s = store();
-		await Promise.allSettled(
-			prefixes
-				.filter((p) => !usedPrefixes.has(p))
-				.flatMap((p) => [`${p}list.webp`, `${p}detail.webp`])
-				.map((k) => s.delete(k))
-		);
+		const doomed = prefixes
+			.filter((p) => !usedPrefixes.has(p))
+			.flatMap((p) => [`${p}list.webp`, `${p}detail.webp`]);
+		const results = await Promise.allSettled(doomed.map((k) => s.delete(k)));
+		// A leftover object has no row any more; this line is the only trace of its key.
+		results.forEach((r, i) => {
+			if (r.status === 'rejected') console.error('photo cleanup failed', doomed[i], r.reason);
+		});
 	} catch (e) {
-		console.error('photo cleanup failed', e);
+		// Store not configured, or the reference check failed: none of these pairs was deleted.
+		console.error('photo cleanup failed', prefixes, e);
 	}
 }

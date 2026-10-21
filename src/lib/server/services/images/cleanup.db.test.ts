@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { db } from '#lib/server/db/index.js';
 import { member } from '#lib/server/db/schema.js';
 import { deleteUnreferencedPhotos } from './cleanup';
@@ -46,5 +46,41 @@ describe('deleteUnreferencedPhotos', () => {
 				throw new Error('no R2 env');
 			}, [gone.list])
 		).resolves.toBeUndefined();
+	});
+});
+
+describe('deleteUnreferencedPhotos failures', () => {
+	it('logs each key it could not delete (the only trace of the leftover object) and deletes the rest', async () => {
+		const store = memoryImageStore();
+		const photo = pair('recipe');
+		await seed(store, photo);
+		const flaky = {
+			...store,
+			delete: async (key: string) => {
+				if (key === photo.list) throw new Error('R2 unavailable');
+				await store.delete(key);
+			}
+		};
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			await deleteUnreferencedPhotos(() => flaky, [photo.list]);
+			expect(log.mock.calls.flat().join(' ')).toContain(photo.list);
+			expect([...store.objects.keys()]).toEqual([photo.list]);
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	it('logs the photos it skipped when the store cannot be built (R2_* unset)', async () => {
+		const photo = pair('member');
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			await deleteUnreferencedPhotos(() => {
+				throw new Error('no R2 env');
+			}, [photo.list]);
+			expect(log.mock.calls.flat().join(' ')).toContain(photo.prefix);
+		} finally {
+			log.mockRestore();
+		}
 	});
 });
