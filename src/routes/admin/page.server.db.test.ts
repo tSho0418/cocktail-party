@@ -111,6 +111,11 @@ describe('/admin as an Administrator', () => {
 		expect(await loadAs(admin, '?status=bogus')).toMatchObject({ status: 'open' });
 	});
 
+	it('shows the first page for a malformed ?cursor instead of failing', async () => {
+		const ok = await loadAs(admin, '?status=all');
+		expect(await loadAs(admin, '?status=all&cursor=garbage')).toEqual(ok);
+	});
+
 	it('changes status, suspends and lifts, rejects a malformed Ingredient id without a 500', async () => {
 		expect(await act('setStatus', admin, { id: reportId, status: 'resolved' })).toBeUndefined();
 		expect((await db.select().from(report).where(eq(report.id, reportId)))[0].status).toBe(

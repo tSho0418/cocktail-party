@@ -37,11 +37,6 @@
 		{#if data.reports.length === 0}
 			<p class="mt-2 text-sm text-gray-600">通報はありません。</p>
 		{/if}
-		{#if data.reportsCut}
-			<p class="mt-2 text-sm text-gray-600">
-				新しい順に {data.reportLimit} 件まで表示しています。古い通報は状態で絞り込んでください。
-			</p>
-		{/if}
 		<ul class="mt-2 space-y-3">
 			{#each data.reports as r (r.id)}
 				<li class="rounded border border-gray-200 p-3 text-sm">
@@ -99,6 +94,20 @@
 				</li>
 			{/each}
 		</ul>
+		{#if data.nextCursor}
+			<!-- eslint-disable svelte/no-navigation-without-resolve -- same page, only the query changes -->
+			<a
+				href={resolve('/admin') +
+					'?' +
+					new URLSearchParams({
+						...(data.status === 'open' ? {} : { status: data.status }),
+						cursor: data.nextCursor
+					})}
+				rel="next"
+				class="mt-3 inline-block text-sm underline">次へ</a
+			>
+			<!-- eslint-enable svelte/no-navigation-without-resolve -->
+		{/if}
 	</section>
 
 	<section class="mt-10" aria-labelledby="suspension-heading">

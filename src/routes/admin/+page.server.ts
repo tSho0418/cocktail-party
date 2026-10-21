@@ -20,28 +20,28 @@ import { adminErrorMessage } from '#lib/report-messages.js';
 import { requireAdmin } from './require-admin';
 import type { Actions, PageServerLoad } from './$types';
 
-// Reports shown at once. The page says so when the list was cut.
-const REPORT_LIMIT = 200;
-
 // Default: unhandled Reports only, so old open ones never fall off a list full of handled ones.
 export const load: PageServerLoad = async ({ locals, url }) => {
 	const actor = requireAdmin(locals);
 	const param = url.searchParams.get('status');
 	const status: ReportStatus | 'all' =
 		param === 'all' ? 'all' : (REPORT_STATUSES.find((s) => s === param) ?? 'open');
+	const listing = (cursor: string | null) =>
+		listReports(db, actor, { status: status === 'all' ? undefined : status, cursor });
+	// A stale or tampered ?cursor shows the first page rather than an error.
+	const first = async () => {
+		const r = await listing(url.searchParams.get('cursor'));
+		return r.ok || r.error !== 'invalid_cursor' ? r : listing(null);
+	};
 	const [reports, suspended, ingredients] = await Promise.all([
-		listReports(db, actor, {
-			status: status === 'all' ? undefined : status,
-			limit: REPORT_LIMIT + 1
-		}),
+		first(),
 		listSuspendedMembers(db, actor),
 		listIngredientsWithAbv(db)
 	]);
 	return {
 		status,
-		reports: reports.ok ? reports.value.slice(0, REPORT_LIMIT) : [],
-		reportsCut: reports.ok && reports.value.length > REPORT_LIMIT,
-		reportLimit: REPORT_LIMIT,
+		reports: reports.ok ? reports.value.items : [],
+		nextCursor: reports.ok ? reports.value.nextCursor : null,
 		suspended: suspended.ok ? suspended.value : [],
 		ingredients
 	};
