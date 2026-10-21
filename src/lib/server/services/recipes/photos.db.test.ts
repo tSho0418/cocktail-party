@@ -47,31 +47,48 @@ const created = async (mainPhotoKey: string) => {
 	return r.value.id;
 };
 
-/** Resolves once some other connection is waiting for a row lock. */
-async function lockWaiter() {
-	for (let i = 0; i < 100; i++) {
+/**
+ * Resolves once a connection is waiting for a lock that the connection `holderPid` holds; waits
+ * of unrelated connections do not count. Polls tightly, so it returns as soon as the wait exists.
+ */
+async function waitingFor(holderPid: number) {
+	for (let i = 0; i < 300; i++) {
 		const { rows } = await db.execute<{ n: number }>(
-			sql`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`
+			sql`select count(*)::int as n from pg_stat_activity where ${holderPid} = any(pg_blocking_pids(pid))`
 		);
 		if (rows[0].n > 0) return;
-		await new Promise((r) => setTimeout(r, 20));
+		await new Promise((r) => setTimeout(r, 5));
 	}
-	throw new Error('no transaction is waiting for a lock');
+	throw new Error(`no transaction is waiting for a lock held by backend ${holderPid}`);
 }
 
-/** Runs `hold` in a transaction that stays open until `commit()`; resolves `ready` once `hold` returned. */
+/**
+ * Runs `hold` in a transaction that stays open until `commit()`. `result` resolves once `hold`
+ * returned and `pid` is the backend holding its locks. The caller must `release()` in a
+ * `finally`, so a failing assertion cannot leave the transaction (and its row locks) open.
+ */
 function holdingTransaction<T>(
 	hold: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<T>
 ) {
 	let commit!: () => void;
 	const gate = new Promise<void>((r) => (commit = r));
-	let ready!: (v: T) => void;
-	const result = new Promise<T>((r) => (ready = r));
+	let ready!: (v: { value: T; pid: number }) => void;
+	const held = new Promise<{ value: T; pid: number }>((r) => (ready = r));
 	const done = db.transaction(async (tx) => {
-		ready(await hold(tx));
+		const { rows } = await tx.execute<{ pid: number }>(sql`select pg_backend_pid() as pid`);
+		ready({ value: await hold(tx), pid: rows[0].pid });
 		await gate;
 	});
-	return { result, commit, done };
+	return {
+		held,
+		done,
+		commit,
+		/** Commits (if not yet) and waits for the transaction to end. */
+		release: async () => {
+			commit();
+			await done;
+		}
+	};
 }
 
 describe('photo release vs concurrent Recipe writes (#16)', () => {
@@ -82,22 +99,25 @@ describe('photo release vs concurrent Recipe writes (#16)', () => {
 
 		// Another request is publishing a second Recipe with the same photo, not yet committed.
 		const attaching = holdingTransaction((tx) => createRecipe(tx, alice, body(shared)));
-		expect((await attaching.result).ok).toBe(true);
+		try {
+			const { value, pid } = await attaching.held;
+			expect(value.ok).toBe(true);
 
-		const editing = updateRecipe(db, alice, a, body(other)); // drops `shared`; must wait
-		await lockWaiter();
-		attaching.commit();
-		await attaching.done;
+			const editing = updateRecipe(db, alice, a, body(other)); // drops `shared`; must wait
+			await waitingFor(pid);
+			await attaching.release();
 
-		const edited = await editing;
-		expect(edited).toMatchObject({ ok: true, value: { removedPhotoKeys: [] } });
-		expect(await db.select().from(recipe).where(eq(recipe.mainPhotoKey, shared))).toHaveLength(1);
-		expect(
-			await db
-				.select()
-				.from(photoUpload)
-				.where(eq(photoUpload.id, shared.split('/')[1]))
-		).toHaveLength(1);
+			expect(await editing).toMatchObject({ ok: true, value: { removedPhotoKeys: [] } });
+			expect(await db.select().from(recipe).where(eq(recipe.mainPhotoKey, shared))).toHaveLength(1);
+			expect(
+				await db
+					.select()
+					.from(photoUpload)
+					.where(eq(photoUpload.id, shared.split('/')[1]))
+			).toHaveLength(1);
+		} finally {
+			await attaching.release();
+		}
 	});
 
 	it('rejects a Recipe that tries to attach a photo while its last user is being deleted', async () => {
@@ -105,17 +125,21 @@ describe('photo release vs concurrent Recipe writes (#16)', () => {
 		const a = await created(shared);
 
 		const deleting = holdingTransaction((tx) => deleteRecipe(tx, alice, a)); // released, uncommitted
-		expect(await deleting.result).toMatchObject({
-			ok: true,
-			value: { photoKeys: [expect.any(String), expect.any(String)] }
-		});
+		try {
+			const { value, pid } = await deleting.held;
+			expect(value).toMatchObject({
+				ok: true,
+				value: { photoKeys: [expect.any(String), expect.any(String)] }
+			});
 
-		const attaching = createRecipe(db, alice, body(shared)); // must wait for the delete
-		await lockWaiter();
-		deleting.commit();
-		await deleting.done;
+			const attaching = createRecipe(db, alice, body(shared)); // must wait for the delete
+			await waitingFor(pid);
+			await deleting.release();
 
-		expect(await attaching).toEqual({ ok: false, error: 'photo_key_invalid' });
-		expect(await db.select().from(recipe).where(eq(recipe.mainPhotoKey, shared))).toEqual([]);
+			expect(await attaching).toEqual({ ok: false, error: 'photo_key_invalid' });
+			expect(await db.select().from(recipe).where(eq(recipe.mainPhotoKey, shared))).toEqual([]);
+		} finally {
+			await deleting.release();
+		}
 	});
 });
