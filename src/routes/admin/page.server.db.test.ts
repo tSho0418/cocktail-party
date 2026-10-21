@@ -111,6 +111,47 @@ describe('/admin as an Administrator', () => {
 		expect(await loadAs(admin, '?status=bogus')).toMatchObject({ status: 'open' });
 	});
 
+	it('shows the first page for a malformed ?cursor instead of failing', async () => {
+		const ok = await loadAs(admin, '?status=all');
+		expect(await loadAs(admin, '?status=all&cursor=garbage')).toEqual(ok);
+		const impossible = Buffer.from(
+			JSON.stringify(['2031-02-30 00:00:00+00', randomUUID()])
+		).toString('base64url');
+		expect(await loadAs(admin, `?status=all&cursor=${impossible}`)).toEqual(ok);
+	});
+
+	it('follows nextCursor to the next page and keeps the status', async () => {
+		const reporters = await db
+			.insert(member)
+			.values(Array.from({ length: 52 }, (_, i) => ({ username: `pg${i}_${tag}` })))
+			.returning({ id: member.id });
+		await db.insert(report).values(
+			reporters.map((m) => ({
+				recipeId,
+				reporterId: m.id,
+				reportedMemberId: victim.id,
+				reason: 'spam' as const,
+				status: 'dismissed' as const
+			}))
+		);
+		type Page = {
+			status: string;
+			reports: { id: string; status: string }[];
+			nextCursor: string | null;
+		};
+		const p1 = (await loadAs(admin, '?status=dismissed')) as Page;
+		expect(p1.nextCursor).not.toBeNull();
+		const p2 = (await loadAs(
+			admin,
+			`?status=dismissed&cursor=${encodeURIComponent(p1.nextCursor!)}`
+		)) as Page;
+		expect(p2.status).toBe('dismissed');
+		expect(p2.reports.length).toBeGreaterThan(0);
+		expect(p2.reports.every((r) => r.status === 'dismissed')).toBe(true);
+		const seen = new Set(p1.reports.map((r) => r.id));
+		expect(p2.reports.some((r) => seen.has(r.id))).toBe(false);
+	});
+
 	it('changes status, suspends and lifts, rejects a malformed Ingredient id without a 500', async () => {
 		expect(await act('setStatus', admin, { id: reportId, status: 'resolved' })).toBeUndefined();
 		expect((await db.select().from(report).where(eq(report.id, reportId)))[0].status).toBe(

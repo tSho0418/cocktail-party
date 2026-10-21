@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { db } from '#lib/server/db/index.js';
 import { follow, recipe, report } from '#lib/server/db/schema.js';
@@ -182,7 +182,7 @@ describe('Recipe deletion and withdrawal keep Reports (FR-074/078)', () => {
 			reportedMemberId: author.id
 		});
 		const rows = await listReports(db, actorOf(admin));
-		expect(rows.ok && rows.value.find((r) => r.id === reportId)).toMatchObject({
+		expect(rows.ok && rows.value.items.find((r) => r.id === reportId)).toMatchObject({
 			targetState: 'recipe_deleted',
 			recipeTitle: null,
 			reportedUsername: author.username
@@ -205,7 +205,7 @@ describe('Recipe deletion and withdrawal keep Reports (FR-074/078)', () => {
 		await withdrawMember({ id: leaver.id });
 
 		const rows = await listReports(db, actorOf(admin));
-		const by = (id: string) => rows.ok && rows.value.find((r) => r.id === id);
+		const by = (id: string) => rows.ok && rows.value.items.find((r) => r.id === id);
 		expect(by(received)).toMatchObject({
 			targetState: 'member_withdrawn',
 			recipeId: null,
@@ -261,5 +261,84 @@ describe('Suspension (FR-075)', () => {
 		const self = await call(admin, 'PUT', `/admin/members/${admin.username}/suspension`);
 		expect(self.status).toBe(422);
 		expect(await getProfile(db, admin.username!, null)).not.toBeNull();
+	});
+});
+
+describe('GET /api/admin/reports paging', () => {
+	it('pages through every Report once, including equal created_at, per status, and rejects bad cursors', async () => {
+		const admin = await seedMember(uniq(), { isAdministrator: true });
+		const author = await seedMember(uniq());
+		const reporters = await Promise.all(Array.from({ length: 7 }, () => seedMember(uniq())));
+		const recipeId = await newRecipe(author);
+		// Differ only below the millisecond, with ties; a cursor that rounded to ms would skip or repeat.
+		const times = [1, 2, 2, 2, 3, 3, 500000].map(
+			(us) => `2031-01-01 00:00:00.${String(123400 + us).slice(0, 6)}+00`
+		);
+		const rows = await db
+			.insert(report)
+			.values(
+				reporters.map((m, i) => ({
+					recipeId,
+					reporterId: m.id,
+					reportedMemberId: author.id,
+					reason: 'spam' as const,
+					status: i % 2 ? ('resolved' as const) : ('open' as const),
+					createdAt: sql`${times[i]}::timestamptz`
+				}))
+			)
+			.returning({
+				id: report.id,
+				status: report.status,
+				at: sql<string>`${report.createdAt}::text`
+			});
+		const mine = new Set(rows.map((r) => r.id));
+
+		const collect = async (status?: 'open' | 'resolved') => {
+			const seen: string[] = [];
+			let cursor: string | null = null;
+			do {
+				const r = await listReports(db, actorOf(admin), { status, cursor, limit: 2 });
+				if (!r.ok) throw new Error(r.error);
+				expect(r.value.items.length).toBeLessThanOrEqual(2);
+				seen.push(...r.value.items.map((i) => i.id));
+				cursor = r.value.nextCursor;
+			} while (cursor);
+			return seen.filter((id) => mine.has(id));
+		};
+		const all = await collect();
+		const newestFirst = [...rows]
+			.sort((a, b) => (a.at === b.at ? 0 : a.at < b.at ? 1 : -1) || (a.id < b.id ? 1 : -1))
+			.map((r) => r.id);
+		expect(all).toEqual(newestFirst);
+		const open = await collect('open');
+		const resolved = await collect('resolved');
+		expect(open.sort()).toEqual(
+			rows
+				.filter((r) => r.status === 'open')
+				.map((r) => r.id)
+				.sort()
+		);
+		expect(resolved.sort()).toEqual(
+			rows
+				.filter((r) => r.status === 'resolved')
+				.map((r) => r.id)
+				.sort()
+		);
+
+		const first = await (await call(admin, 'GET', '/admin/reports')).json();
+		expect(first).toHaveProperty('nextCursor');
+		const enc = (c: unknown) => Buffer.from(JSON.stringify(c)).toString('base64url');
+		const id = crypto.randomUUID();
+		for (const bad of [
+			'!!!',
+			btoa('[1,2]'),
+			enc(['x', 'y']),
+			enc(['2031-02-30 00:00:00+00', id]),
+			enc(['2031-13-01 00:00:00+00', id]),
+			enc(['2031-01-01 25:00:00+00', id]),
+			enc(['2031-01-01 00:00:00+99', id])
+		]) {
+			expect((await call(admin, 'GET', `/admin/reports?cursor=${bad}`)).status).toBe(400);
+		}
 	});
 });

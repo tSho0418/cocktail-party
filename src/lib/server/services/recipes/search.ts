@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, notInArray, sql, type SQL } from 'drizzle-orm';
 import { ingredient, member, recipe, recipeIngredient } from '#lib/server/db/schema.js';
 import type { Result } from '#lib/domain/alcohol/index.js';
+import { encodeCursor, isTimestampText, parseCursor } from '#lib/server/services/cursor.js';
 import { isUuid, likeCountOf, type Db } from './recipes';
 
 export type SearchParams = {
@@ -43,24 +44,10 @@ export const MAX_FILTER_IDS = 20;
 type Cursor = { s: 'new' | 'like'; l: number; t: string; i: string };
 
 // created_at travels as Postgres text (microseconds + offset) so the keyset compares exactly.
-const encodeCursor = (c: Cursor) => Buffer.from(JSON.stringify(c)).toString('base64url');
-
-function decodeCursor(raw: string, sort: Cursor['s']): Cursor | null {
-	let c: Cursor;
-	try {
-		c = JSON.parse(Buffer.from(raw, 'base64url').toString());
-	} catch {
-		return null;
-	}
-	const ts = /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(\.\d{1,6})?[+-]\d\d(:\d\d)?$/;
+function decodeSearchCursor(raw: string, sort: Cursor['s']): Cursor | null {
+	const c = parseCursor(raw) as Cursor | null;
 	const valid =
-		c?.s === sort &&
-		Number.isSafeInteger(c.l) &&
-		c.l >= 0 &&
-		typeof c.t === 'string' &&
-		ts.test(c.t) &&
-		!Number.isNaN(Date.parse(c.t.replace(' ', 'T').replace(/([+-]\d\d)$/, '$1:00'))) &&
-		isUuid(c.i);
+		c?.s === sort && Number.isSafeInteger(c.l) && c.l >= 0 && isTimestampText(c.t) && isUuid(c.i);
 	return valid ? c : null;
 }
 
@@ -81,7 +68,7 @@ export async function searchRecipes(
 	const ingredientIds = [...new Set(params.ingredientIds ?? [])];
 	const baseIds = [...new Set(params.baseIds ?? [])];
 	const terms = params.keyword?.split(/\s+/).filter(Boolean) ?? [];
-	const cursor = params.cursor ? decodeCursor(params.cursor, sort) : null;
+	const cursor = params.cursor ? decodeSearchCursor(params.cursor, sort) : null;
 	if (
 		!Number.isInteger(limit) ||
 		limit < 1 ||
