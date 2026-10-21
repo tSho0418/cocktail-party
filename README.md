@@ -143,7 +143,7 @@ Both pages are public, server-rendered and read through the services directly (n
 
 ### Terms and Privacy Policy (NFR-009)
 
-`/terms` and `/privacy` are static server-rendered pages (`src/routes/terms`, `src/routes/privacy`). They are exempt from the Age Gate (`isAgeGateExempt` in `src/lib/age-gate.ts`, used by `+layout.server.ts`), so a visitor can read them before declaring they are 20+. The operator name, the contact and the effective date shown on both pages are the three constants in `src/lib/legal.ts`; they are decisions for a person, to be set before launch. The texts are drafts, not legal advice: have them reviewed before going public. Links from the header or footer are not part of these pages.
+`/terms` and `/privacy` are static server-rendered pages (`src/routes/terms`, `src/routes/privacy`). They are exempt from the Age Gate (`isAgeGateExempt` in `src/lib/age-gate.ts`, used by `+layout.server.ts`), so a visitor can read them before declaring they are 20+. The operator name, the contact and the effective date shown on both pages are the three constants in `src/lib/legal.ts`; they are decisions for a person, to be set before launch. The texts are drafts, not legal advice: have them reviewed before going public. Both pages are linked from the footer in `+layout.svelte`.
 
 ### Backup (NFR-003)
 
@@ -170,7 +170,7 @@ None of these can be exercised without real credentials. Deploy a Preview with t
 3. **Suspension and withdrawal with real sessions**: withdraw a test Member and confirm its photos disappear from R2.
 4. **Demo Recipes**: run `pnpm db:seed:recipes` against the Preview/production database with `R2_*` set and open the top page.
 5. **Backup**: run the Backup workflow by hand, check the object in the backup bucket, and run `pg_restore --list` on a downloaded copy. Then enable the schedule in `backup.yml` before launch, and check that the bucket has no public access or custom domain and that the `production` environment is limited to `main`.
-6. **Terms and Privacy**: fill in `src/lib/legal.ts` (operator name, contact and date are still provisional), have both pages reviewed, and link them from the header or footer.
+6. **Terms and Privacy**: fill in `src/lib/legal.ts` (operator name, contact and date are still provisional) and have both pages reviewed. The footer already links to them.
 
 ## Branches, CI and deploy
 
