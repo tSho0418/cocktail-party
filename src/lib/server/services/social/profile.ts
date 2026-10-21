@@ -2,7 +2,13 @@ import { and, eq, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 import { follow, member, recipe, save } from '#lib/server/db/schema.js';
 import { USERNAME_PATTERN } from '#lib/server/services/members/index.js';
-import { isUuid, likeCountOf, type Db } from '#lib/server/services/recipes/index.js';
+import {
+	isUuid,
+	likeCountOf,
+	lockPhotos,
+	releaseUnreferenced,
+	type Db
+} from '#lib/server/services/recipes/index.js';
 
 export const PAGE_SIZE = 24;
 export const BIO_MAX = 200;
@@ -252,42 +258,66 @@ export type UpdateProfileError =
 const UNIQUE_VIOLATION = '23505';
 
 /**
- * Changes Username (FR-053), bio (FR-054, at most 200 characters; blank clears it) and/or icon
+ * Changes Username (FR-053), bio (FR-054, at most 200 characters; blank clears it; CRLF counts and is stored as one newline) and/or icon
  * in one transaction: any rejected field leaves all of them unchanged. Fields left undefined are
- * untouched; `iconKey: null` removes the icon. Returns the icon key that was replaced, for the
- * caller to delete from storage once nothing uses it.
+ * untouched; `iconKey: null` removes the icon; an empty string is an invalid key. A new icon must be an upload (`kind = 'member'`) of
+ * this Member (the key it already has stays valid). An icon that is replaced or removed has its
+ * upload released in the same transaction; `releasedKeys` are its objects, for the caller to
+ * delete from storage after commit.
  */
 export async function updateProfile(
 	db: Db,
 	memberId: string,
 	input: { username?: string; bio?: string; iconKey?: string | null }
 ): Promise<
-	{ ok: true; value: { replacedIconKey: string | null } } | { ok: false; error: UpdateProfileError }
+	{ ok: true; value: { releasedKeys: string[] } } | { ok: false; error: UpdateProfileError }
 > {
-	const bio = input.bio === undefined ? undefined : input.bio.trim() || null;
+	const bio =
+		input.bio === undefined ? undefined : input.bio.replace(/\r\n?/g, '\n').trim() || null;
 	if (input.username !== undefined && !USERNAME_PATTERN.test(input.username))
 		return { ok: false, error: 'username_invalid' };
 	if (bio && charLength(bio) > BIO_MAX) return { ok: false, error: 'bio_too_long' };
-	if (input.iconKey && !ICON_KEY.test(input.iconKey))
+	if (input.iconKey !== undefined && input.iconKey !== null && !ICON_KEY.test(input.iconKey))
 		return { ok: false, error: 'icon_key_invalid' };
 	try {
 		return await db.transaction(async (tx) => {
+			// Lock order (README, Lock order): upload rows, then the Member row, as in withdrawMember, so
+			// the two cannot deadlock. Only the Member can change their own icon, so the icon read here
+			// can only be stale if the same Member edits twice at once; then the old upload is left for
+			// the sweep.
+			let photos: Awaited<ReturnType<typeof lockPhotos>> | null = null;
+			if (input.iconKey !== undefined) {
+				const [before] = await tx
+					.select({ iconKey: member.iconKey })
+					.from(member)
+					.where(eq(member.id, memberId));
+				photos = await lockPhotos(
+					tx,
+					'member',
+					[before?.iconKey, input.iconKey].filter((k): k is string => !!k)
+				);
+			}
 			const [cur] = await tx
 				.select({ iconKey: member.iconKey })
 				.from(member)
 				.where(eq(member.id, memberId))
 				.for('update');
+			if (
+				input.iconKey &&
+				input.iconKey !== cur?.iconKey &&
+				!photos?.ownedBy(memberId, [input.iconKey])
+			)
+				return { ok: false as const, error: 'icon_key_invalid' as const };
 			const set: Partial<typeof member.$inferInsert> = {};
 			if (input.username !== undefined) set.username = input.username;
 			if (bio !== undefined) set.bio = bio;
 			if (input.iconKey !== undefined) set.iconKey = input.iconKey;
 			if (cur && Object.keys(set).length > 0)
 				await tx.update(member).set(set).where(eq(member.id, memberId));
-			const replaced =
-				input.iconKey !== undefined && cur?.iconKey && cur.iconKey !== input.iconKey
-					? cur.iconKey
-					: null;
-			return { ok: true as const, value: { replacedIconKey: replaced } };
+			return {
+				ok: true as const,
+				value: { releasedKeys: await releaseUnreferenced(tx, 'member', photos?.ids ?? []) }
+			};
 		});
 	} catch (e) {
 		if ((e as { cause?: { code?: string } }).cause?.code === UNIQUE_VIOLATION)

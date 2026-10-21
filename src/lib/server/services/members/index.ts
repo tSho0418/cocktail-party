@@ -1,6 +1,6 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import { db } from '#lib/server/db/index.js';
-import { member, recipe, recipePhoto, report } from '#lib/server/db/schema.js';
+import { member, photoUpload, recipe, recipePhoto, report } from '#lib/server/db/schema.js';
 
 /** Same rule as the member_username_format CHECK (FR-053). */
 export const USERNAME_PATTERN = /^[A-Za-z0-9_]{3,20}$/;
@@ -24,12 +24,30 @@ export async function setUsername(memberId: string, username: string): Promise<S
 
 /**
  * Withdrawal (FR-058, FR-078) in one transaction. Deleting the Member cascades to its sessions,
- * account, Recipes, Photos, Likes, Saves and Follows; Reports it received or sent are kept with
- * the links nulled by their FKs. Returns the object-storage keys the caller must delete
- * afterwards (Main Photos, extra Photos, icon).
+ * account, Recipes, Photos, uploads, Likes, Saves and Follows; Reports it received or sent are
+ * kept with the links nulled by their FKs. Returns the object-storage keys the caller must
+ * delete afterwards (Main Photos, extra Photos, icon, and both files of every upload, including
+ * ones no Recipe uses: their `photo_upload` rows go with the Member, so this is the last time
+ * the keys are known).
  */
 export async function withdrawMember(actor: { id: string }): Promise<string[]> {
 	return db.transaction(async (tx) => {
+		// Lock order: Recipes, then uploads (each by id), then the Member row (#40). Recipe writes
+		// take the Recipe row before their upload rows (updateRecipe, deleteRecipe) and the upload
+		// rows before the Member row's FOR KEY SHARE (createRecipe's INSERT); the cascade of the
+		// DELETE below would otherwise take them in another order and could deadlock with those.
+		await tx
+			.select({ id: recipe.id })
+			.from(recipe)
+			.where(eq(recipe.memberId, actor.id))
+			.orderBy(asc(recipe.id))
+			.for('update');
+		await tx
+			.select({ id: photoUpload.id })
+			.from(photoUpload)
+			.where(eq(photoUpload.memberId, actor.id))
+			.orderBy(asc(photoUpload.id))
+			.for('update');
 		const [row] = await tx
 			.select({ iconKey: member.iconKey })
 			.from(member)
@@ -37,6 +55,7 @@ export async function withdrawMember(actor: { id: string }): Promise<string[]> {
 			.for('update');
 		if (!row) return [];
 
+		// Read only now: with the Member row locked, nothing new can be added to their name.
 		const recipes = await tx
 			.select({ id: recipe.id, key: recipe.mainPhotoKey })
 			.from(recipe)
@@ -52,6 +71,10 @@ export async function withdrawMember(actor: { id: string }): Promise<string[]> {
 						)
 					)
 			: [];
+		const uploads = await tx
+			.select({ id: photoUpload.id, kind: photoUpload.kind })
+			.from(photoUpload)
+			.where(eq(photoUpload.memberId, actor.id));
 
 		// Reports already marked recipe_deleted keep that reason.
 		await tx
@@ -60,6 +83,12 @@ export async function withdrawMember(actor: { id: string }): Promise<string[]> {
 			.where(and(eq(report.reportedMemberId, actor.id), eq(report.targetState, 'live')));
 		await tx.delete(member).where(eq(member.id, actor.id));
 
-		return [...recipes, ...extras].map((r) => r.key).concat(row.iconKey ?? []);
+		return [
+			...new Set([
+				...[...recipes, ...extras].map((r) => r.key),
+				...(row.iconKey ? [row.iconKey] : []),
+				...uploads.flatMap((u) => [`${u.kind}/${u.id}/list.webp`, `${u.kind}/${u.id}/detail.webp`])
+			])
+		];
 	});
 }

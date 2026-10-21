@@ -1,7 +1,15 @@
 import { and, eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { follow, member, save } from '#lib/server/db/schema.js';
-import { input, isolated, make, seedIngredients, seedMember } from '../recipes/test-fixtures';
+import { follow, member, photoUpload, save } from '#lib/server/db/schema.js';
+import {
+	input,
+	isolated,
+	make,
+	seedIngredients,
+	seedMember,
+	upload,
+	uploadIcon
+} from '../recipes/test-fixtures';
 import {
 	followMember,
 	getProfile,
@@ -260,7 +268,6 @@ describe('profile (FR-054)', () => {
 	it('updateProfile: bio rules and icon replacement', () =>
 		isolated(async (tx) => {
 			const { alice } = await world(tx);
-			const icon = () => `member/${crypto.randomUUID()}/list.webp`;
 			expect(await updateProfile(tx, alice.memberId, { bio: 'あ'.repeat(201) })).toEqual({
 				ok: false,
 				error: 'bio_too_long'
@@ -268,23 +275,85 @@ describe('profile (FR-054)', () => {
 			expect(await updateProfile(tx, alice.memberId, { bio: 'あ'.repeat(200) })).toMatchObject({
 				ok: true
 			});
+			// A browser sends newlines as CRLF but its maxlength counts one: 198 letters + 2 newlines = 200.
+			const multiline = `${'あ'.repeat(98)}\r\n${'あ'.repeat(99)}\r\nあ`;
+			expect(await updateProfile(tx, alice.memberId, { bio: multiline })).toMatchObject({
+				ok: true
+			});
+			expect((await getProfile(tx, 'alice', null))?.bio).toBe(multiline.replaceAll('\r\n', '\n'));
 			expect(await updateProfile(tx, alice.memberId, { iconKey: 'recipe/x/list.webp' })).toEqual({
 				ok: false,
 				error: 'icon_key_invalid'
 			});
-			const first = icon();
-			const second = icon();
+			const first = await uploadIcon(tx, alice);
+			const second = await uploadIcon(tx, alice);
 			expect(await updateProfile(tx, alice.memberId, { iconKey: first })).toEqual({
 				ok: true,
-				value: { replacedIconKey: null }
+				value: { releasedKeys: [] }
 			});
 			expect(await updateProfile(tx, alice.memberId, { iconKey: second, bio: '  ' })).toEqual({
 				ok: true,
-				value: { replacedIconKey: first }
+				value: { releasedKeys: [first, first.replace('list', 'detail')] }
 			});
 			const p = await getProfile(tx, 'alice', null);
 			expect(p).toMatchObject({ bio: null, iconKey: second });
 			expect((await updateProfile(tx, alice.memberId, { iconKey: null })).ok).toBe(true);
 			expect((await getProfile(tx, 'alice', null))?.iconKey).toBeNull();
+		}));
+
+	it("updateProfile: an icon must be the Member's own icon upload", () =>
+		isolated(async (tx) => {
+			const { alice, bob } = await world(tx);
+			const bobsIcon = await uploadIcon(tx, bob);
+			const bobsPhoto = await upload(tx, bob);
+			const unknown = `member/${crypto.randomUUID()}/list.webp`;
+			const asIcon = (key: string) => updateProfile(tx, alice.memberId, { iconKey: key });
+			expect(await asIcon(bobsIcon)).toEqual({ ok: false, error: 'icon_key_invalid' });
+			expect(await asIcon(unknown)).toEqual({ ok: false, error: 'icon_key_invalid' });
+			expect(await asIcon('')).toEqual({ ok: false, error: 'icon_key_invalid' });
+			// An upload of kind recipe is no icon, even with the member/ prefix swapped in.
+			expect(await asIcon(bobsPhoto.replace('recipe/', 'member/'))).toEqual({
+				ok: false,
+				error: 'icon_key_invalid'
+			});
+			expect((await getProfile(tx, 'alice', null))?.iconKey).toBeNull();
+			// Bob's icon stays his, and a rejected change leaves everything else unchanged.
+			expect(await updateProfile(tx, bob.memberId, { iconKey: bobsIcon })).toMatchObject({
+				ok: true
+			});
+			expect(
+				await updateProfile(tx, alice.memberId, { bio: 'changed', iconKey: bobsIcon })
+			).toEqual({ ok: false, error: 'icon_key_invalid' });
+			expect((await getProfile(tx, 'alice', null))?.bio).toBeNull();
+		}));
+
+	it('updateProfile: replacing or removing the icon releases its upload, and only then', () =>
+		isolated(async (tx) => {
+			const { alice, bob } = await world(tx);
+			const ids = async () =>
+				(await tx.select({ id: photoUpload.id }).from(photoUpload)).map((r) => r.id);
+			const first = await uploadIcon(tx, alice);
+			const second = await uploadIcon(tx, alice);
+			const bobsIcon = await uploadIcon(tx, bob);
+			await updateProfile(tx, alice.memberId, { iconKey: first });
+			// Setting the same icon again keeps it.
+			expect(await updateProfile(tx, alice.memberId, { iconKey: first })).toEqual({
+				ok: true,
+				value: { releasedKeys: [] }
+			});
+			expect(await ids()).toContain(first.split('/')[1]);
+			await updateProfile(tx, alice.memberId, { iconKey: second });
+			expect(await ids()).not.toContain(first.split('/')[1]);
+			// The released icon can no longer be set again.
+			expect(await updateProfile(tx, alice.memberId, { iconKey: first })).toEqual({
+				ok: false,
+				error: 'icon_key_invalid'
+			});
+			expect(await updateProfile(tx, alice.memberId, { iconKey: null })).toEqual({
+				ok: true,
+				value: { releasedKeys: [second, second.replace('list', 'detail')] }
+			});
+			// Other Members' uploads, and Alice's own unattached one, are not touched.
+			expect(await ids()).toEqual(expect.arrayContaining([bobsIcon.split('/')[1]]));
 		}));
 });

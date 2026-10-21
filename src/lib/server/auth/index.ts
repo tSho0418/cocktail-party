@@ -76,6 +76,11 @@ const createAuth = () =>
 					})
 				}
 			},
+			account: {
+				// The provider's ID token is a JWT that can carry email, name and picture claims, which
+				// are not kept either.
+				create: { before: async (a) => ({ data: { ...a, idToken: null } }) }
+			},
 			session: {
 				// Sign-in refused while suspended (FR-075); existing sessions: see resolveMember.
 				create: { before: async (s) => ((await isSuspended(s.userId)) ? false : undefined) }

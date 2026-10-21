@@ -196,7 +196,7 @@ export const recipePhoto = pgTable(
 );
 
 // Who uploaded which photo (the uuid in `<kind>/<id>/{list,detail}.webp`). A Recipe may only use
-// uploads of its own Member, and an upload row is deleted when its photo is released, so a key
+// uploads of its own Member (a Member icon only a `member` upload of its own), and an upload row is deleted when its photo is released, so a key
 // that is not here can neither be attached nor deleted from storage (README "Photo uploads").
 export const photoUpload = pgTable(
 	'photo_upload',
