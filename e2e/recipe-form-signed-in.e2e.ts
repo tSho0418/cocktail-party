@@ -6,6 +6,7 @@ import { pool, seedIngredient, seedPhotoUpload, signIn } from './signed-in';
 const tag = randomUUID().slice(0, 8);
 const gin = `E2Eジン${tag}`;
 const tonic = `E2Eトニック${tag}`;
+const soda = `E2Eソーダ${tag}`;
 let memberId: string;
 const memberIds: string[] = [];
 
@@ -13,9 +14,12 @@ test.beforeAll(async () => {
 	// Leftovers of a run that was killed before its afterAll.
 	// (Own prefix: browse.e2e.ts runs in parallel with `e2e_` Members of its own.)
 	await pool.query(`delete from member where username like 'e2e\\_form\\_%'`);
-	await pool.query(`delete from ingredient where name like 'E2Eジン%' or name like 'E2Eトニック%'`);
+	await pool.query(
+		`delete from ingredient where name like 'E2Eジン%' or name like 'E2Eトニック%' or name like 'E2Eソーダ%'`
+	);
 	await seedIngredient(gin, 40);
 	await seedIngredient(tonic, 0);
+	await seedIngredient(soda, 0);
 });
 
 test.beforeEach(async ({ context }) => {
@@ -27,7 +31,7 @@ test.beforeEach(async ({ context }) => {
 test.afterAll(async () => {
 	await pool.query(`delete from recipe where member_id = any($1)`, [memberIds]);
 	await pool.query(`delete from member where id = any($1)`, [memberIds]);
-	await pool.query(`delete from ingredient where name = any($1)`, [[gin, tonic]]);
+	await pool.query(`delete from ingredient where name = any($1)`, [[gin, tonic, soda]]);
 	await pool.end();
 });
 
@@ -242,4 +246,97 @@ test('the photo picker waits for an upload to finish, so the first pick stays th
 	await expect(page.getByLabel('写真を追加する')).toBeDisabled();
 	release();
 	await expect(page.getByLabel('完成写真を変更する')).toBeEnabled();
+});
+
+test('deleting an Ingredient row moves focus to the next row, else the previous, else the search (NFR-005)', async ({
+	page
+}) => {
+	await page.goto('/recipes/new');
+	await addIngredient(page, gin, '1');
+	await addIngredient(page, tonic, '2');
+	await addIngredient(page, soda, '3');
+	const ratios = page.getByRole('textbox', { name: '割合' });
+	const focused = page.locator(':focus');
+
+	await page.getByRole('button', { name: `${tonic} を削除` }).click();
+	await expect(ratios).toHaveCount(2);
+	await expect(focused).toHaveValue('3'); // the next row (soda) took its place
+
+	await page.getByRole('button', { name: `${soda} を削除` }).click();
+	await expect(ratios).toHaveCount(1);
+	await expect(focused).toHaveValue('1'); // the last row went: the previous one (gin)
+
+	await page.getByRole('button', { name: `${gin} を削除` }).click();
+	await expect(ratios).toHaveCount(0);
+	await expect(page.getByLabel('材料を探す')).toBeFocused();
+});
+
+test('deleting a step moves focus to the next step, else the previous; the last one cannot be deleted (NFR-005)', async ({
+	page
+}) => {
+	await page.goto('/recipes/new');
+	const add = page.getByRole('button', { name: 'ステップを追加' });
+	await add.click();
+	await add.click();
+	for (const n of [1, 2, 3])
+		await page.getByRole('textbox', { name: `ステップ ${n}` }).fill(`手順${n}`);
+
+	await page.getByRole('button', { name: 'ステップ 2 を削除' }).click();
+	await expect(page.getByRole('textbox', { name: 'ステップ 2' })).toHaveValue('手順3');
+	await expect(page.getByRole('textbox', { name: 'ステップ 2' })).toBeFocused();
+
+	await page.getByRole('button', { name: 'ステップ 2 を削除' }).click();
+	await expect(page.getByRole('textbox', { name: 'ステップ 1' })).toBeFocused();
+	await expect(page.getByRole('textbox', { name: /ステップ/ })).toHaveCount(1);
+	await expect(page.getByRole('button', { name: 'ステップ 1 を削除' })).toBeDisabled();
+});
+
+test('deleting an extra photo moves focus to the next photo, else the previous, else the add control (NFR-005)', async ({
+	page
+}) => {
+	await stubUploads(page);
+	await page.goto('/recipes/new');
+	await pickPhoto(page, '完成写真を選ぶ');
+	await expect(page.getByLabel('完成写真を変更する')).toBeEnabled();
+	for (const n of [1, 2, 3]) {
+		await expect(page.getByLabel('写真を追加する')).toBeEnabled();
+		await pickPhoto(page, '写真を追加する');
+		await expect(page.getByRole('button', { name: `追加の写真 ${n} を削除` })).toBeVisible();
+	}
+
+	await page.getByRole('button', { name: '追加の写真 2 を削除' }).click();
+	await expect(page.getByRole('button', { name: '追加の写真 3 を削除' })).toHaveCount(0);
+	await expect(page.getByRole('button', { name: '追加の写真 2 を削除' })).toBeFocused();
+
+	await page.getByRole('button', { name: '追加の写真 2 を削除' }).click();
+	await expect(page.getByRole('button', { name: '追加の写真 1 を削除' })).toBeFocused();
+
+	await page.getByRole('button', { name: '追加の写真 1 を削除' }).click();
+	await expect(page.getByLabel('写真を追加する')).toBeFocused();
+});
+
+test('deleting the last extra photo during an upload moves focus to the photos heading (NFR-005)', async ({
+	page
+}) => {
+	let uploads = 0;
+	let release!: () => void;
+	const held = new Promise<void>((r) => (release = r));
+	await page.route('**/api/photos?kind=recipe', async (route) => {
+		const keys = { list: await seedPhotoUpload(memberId) };
+		if (++uploads === 3) await held; // main and the first extra finish; the second extra hangs
+		await route.fulfill({ json: { keys } });
+	});
+	await page.goto('/recipes/new');
+	await pickPhoto(page, '完成写真を選ぶ');
+	await expect(page.getByLabel('完成写真を変更する')).toBeEnabled();
+	await pickPhoto(page, '写真を追加する');
+	await expect(page.getByRole('button', { name: '追加の写真 1 を削除' })).toBeVisible();
+	await expect(page.getByLabel('写真を追加する')).toBeEnabled();
+	await pickPhoto(page, '写真を追加する');
+	await expect(page.getByLabel('写真を追加する')).toBeDisabled();
+
+	await page.getByRole('button', { name: '追加の写真 1 を削除' }).click();
+	await expect(page.getByRole('button', { name: '追加の写真 1 を削除' })).toHaveCount(0);
+	await expect(page.getByText('追加の写真(任意')).toBeFocused();
+	release();
 });
