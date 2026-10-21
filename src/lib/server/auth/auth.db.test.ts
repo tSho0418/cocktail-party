@@ -104,6 +104,8 @@ describe('Member without a Username', () => {
 		const cookie = cookiesOf(await lineLogin({ sub: 'U-gate' }));
 		const post = await viaHandle('/age-gate', cookie, { method: 'POST' });
 		expect(post.status).toBe(200); // reached the endpoint (a stub 'page' here), not /welcome
+		for (const path of ['/terms', '/privacy'])
+			expect((await viaHandle(path, cookie)).status).toBe(200);
 		await expect(viaHandle('/', cookie)).rejects.toMatchObject({
 			status: 303,
 			location: '/welcome'
@@ -195,6 +197,8 @@ describe('Suspension (FR-075)', () => {
 describe('Username gate', () => {
 	it('redirects pages to /welcome and refuses the API until a Username is set (FR-052)', async () => {
 		const cookie = cookiesOf(await lineLogin({ sub: 'U-gate' }));
+		for (const path of ['/terms', '/privacy'])
+			expect((await viaHandle(path, cookie)).status).toBe(200);
 		await expect(viaHandle('/', cookie)).rejects.toMatchObject({
 			status: 303,
 			location: '/welcome'

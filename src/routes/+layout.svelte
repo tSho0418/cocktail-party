@@ -20,8 +20,6 @@
 	{/if}
 </svelte:head>
 
-<!-- eslint-disable svelte/no-navigation-without-resolve -- /admin, /terms and /privacy are built by other branches (not in the typed route list yet); the saved tab only changes the query -->
-
 <!-- FR-062: the page is always rendered; while the gate is open it is only covered and inert. -->
 <div style="display: contents" inert={data.ageGateOpen}>
 	<div class="flex min-h-screen flex-col">
@@ -36,6 +34,7 @@
 				{:else}
 					{#if data.member.username}
 						<a href={resolve('/recipes/new')} class={link}>レシピを投稿</a>
+						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- only adds the saved tab query to a resolved path -->
 						<a
 							href={resolve('/members/[username]', { username: data.member.username }) +
 								'?tab=saved'}
@@ -45,11 +44,12 @@
 							href={resolve('/members/[username]', { username: data.member.username })}
 							class={link}>マイページ</a
 						>
+						{#if data.member.isAdministrator}
+							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- /admin is built by another branch (not in the typed route list yet) -->
+							<a href="/admin" class={link}>管理</a>
+						{/if}
 					{:else}
 						<a href={resolve('/(auth)/welcome')} class={link}>Username を決める</a>
-					{/if}
-					{#if data.member.isAdministrator}
-						<a href="/admin" class={link}>管理</a>
 					{/if}
 					<a href={resolve('/(auth)/logout')} class={link}>ログアウト</a>
 				{/if}
@@ -65,7 +65,9 @@
 				aria-label="フッター"
 				class="mx-auto flex max-w-5xl flex-wrap gap-x-4 gap-y-1 px-4 py-4 text-sm text-gray-600"
 			>
+				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- /terms is built by another branch -->
 				<a href="/terms" class="underline">利用規約</a>
+				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- /privacy is built by another branch -->
 				<a href="/privacy" class="underline">プライバシーポリシー</a>
 			</nav>
 		</footer>

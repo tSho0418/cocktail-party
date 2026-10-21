@@ -94,6 +94,7 @@ describe('Age Gate on the server', () => {
 		const fresh = nav({ username: null, isAdministrator: false });
 		expect(fresh).toContain('href="/welcome"');
 		expect(fresh).not.toContain('href="/recipes/new"');
+		expect(nav({ username: null, isAdministrator: true })).not.toContain('href="/admin"');
 	});
 
 	it('keeps the declined view out of search indexes (NFR-007)', () => {
