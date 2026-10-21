@@ -281,9 +281,10 @@ export async function updateProfile(
 		return { ok: false, error: 'icon_key_invalid' };
 	try {
 		return await db.transaction(async (tx) => {
-			// Lock order is upload rows, then the Member row, as in withdrawMember, so the two cannot
-			// deadlock. Only the Member can change their own icon, so the icon read here can only be stale
-			// if the same Member edits twice at once; then the old upload is left for the sweep.
+			// Lock order (README, Lock order): upload rows, then the Member row, as in withdrawMember, so
+			// the two cannot deadlock. Only the Member can change their own icon, so the icon read here
+			// can only be stale if the same Member edits twice at once; then the old upload is left for
+			// the sweep.
 			let photos: Awaited<ReturnType<typeof lockPhotos>> | null = null;
 			if (input.iconKey !== undefined) {
 				const [before] = await tx
