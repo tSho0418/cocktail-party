@@ -7,8 +7,9 @@ import { auth, resolveMember } from '#lib/server/auth/index.js';
 const isUnder = (pathname: string, prefix: string) =>
 	pathname === prefix || pathname.startsWith(`${prefix}/`);
 
-// Pages a Member without a Username may still reach (FR-052).
-const BEFORE_USERNAME = ['/welcome', '/logout', '/withdraw'];
+// Pages a Member without a Username may still reach (FR-052). /age-gate is one: the gate
+// is also shown on /welcome, so it must be closable before a Username is chosen.
+const BEFORE_USERNAME = ['/welcome', '/logout', '/withdraw', '/age-gate'];
 
 const authHandle: Handle = async ({ event, resolve }) => {
 	const { pathname } = event.url;
