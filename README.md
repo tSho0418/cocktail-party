@@ -40,6 +40,7 @@ pnpm dev                    # http://localhost:5173
 | `pnpm db:down`                | Stop this checkout's compose Postgres (does nothing to one started elsewhere)                                                                                                                                                         |
 | `pnpm db:reset`               | Drop and recreate the app database (`DATABASE_URL`), then migrate. Other databases on the server are untouched                                                                                                                        |
 | `pnpm db:seed:ingredients`    | Insert the DT-001 Ingredients missing from `DATABASE_URL` (matched by normalized name; existing rows are not changed)                                                                                                                 |
+| `pnpm db:seed:recipes`        | Add the DT-002 demo Recipes (about 20, 4 Non-alcoholic) to `DATABASE_URL`, see "Demo Recipes" below                                                                                                                                   |
 | `pnpm db:generate`            | Generate a migration from the schema (no DB needed)                                                                                                                                                                                   |
 | `pnpm db:migrate`             | Apply migrations to `$DATABASE_URL`                                                                                                                                                                                                   |
 
@@ -120,6 +121,8 @@ The db tests drive Better Auth's real sign-in and callback for LINE with the tok
 
 The root layout also renders the site header (sign-in-dependent links: own profile, saved Recipes, new Recipe, `/admin` for Administrators) and footer (`/terms`, `/privacy`); `/withdraw` is linked from the own profile page. It shows a modal asking the visitor to declare they are 20+ until the `age_gate_consent` cookie exists. `+layout.server.ts` reads the cookie; the "yes" button posts to `POST /age-gate` (`src/routes/age-gate/+server.ts`), which sets the cookie for 30 days (HttpOnly, SameSite=Lax) and redirects back to a same-origin path. "No" is a link to `?age-gate=declined`, which swaps the question for a "not available under 20" message and adds `<meta name="robots" content="noindex">` (the page behind it is a duplicate); no cookie is set. Cookie name, lifetime and the helpers are in `src/lib/age-gate.ts`; the gate itself is `AgeGate.svelte`.
 
+`/terms` and `/privacy` are exempt from the gate (`isAgeGateExempt`).
+
 The page is always server-rendered (FR-062): while the gate is open its container is only `inert` (which also keeps keyboard focus inside the dialog) and covered by the overlay, and `<html>` stops scrolling. The gate works without JavaScript. Playwright runs every spec with the consent cookie set (`playwright.config.ts`); `e2e/age-gate.e2e.ts` clears it.
 
 ## Browsing: top page and Recipe detail (FR-040..046, FR-062, FR-080)
@@ -132,6 +135,39 @@ Both pages are public, server-rendered and read through the services directly (n
 - Image `alt` is generated from the Recipe title (`<title>の写真`, NFR-005).
 - Photo URLs come from `photoUrl(key, 'list'|'detail')` (`services/images/url.ts`): `R2_PUBLIC_BASE_URL` plus the stored key, with the stored `list.webp`/`detail.webp` key swapped for the wanted size. Without `R2_PUBLIC_BASE_URL` no image is rendered (a "写真なし" box on the list, no `og:image`).
 - The e2e job needs the app database (`DATABASE_URL`, migrated): `e2e/browse.e2e.ts` inserts its own rows with SQL and removes them afterwards. `e2e/recipe-form-signed-in.e2e.ts` signs a Member in by inserting a session row and signing the cookie with a fixed test secret (`e2e/signed-in.ts`, handed to the server by `playwright.config.ts`); photo uploads are answered by the spec, since R2 is not reachable. CI starts a Postgres service for it.
+
+## Public launch (Issue #7)
+
+### Terms and Privacy Policy (NFR-009)
+
+`/terms` and `/privacy` are static server-rendered pages (`src/routes/terms`, `src/routes/privacy`). They are exempt from the Age Gate (`isAgeGateExempt` in `src/lib/age-gate.ts`, used by `+layout.server.ts`), so a visitor can read them before declaring they are 20+. The operator name, the contact and the effective date shown on both pages are the three constants in `src/lib/legal.ts`; they are decisions for a person, to be set before launch. The texts are drafts, not legal advice: have them reviewed before going public. Links from the header or footer are not part of these pages.
+
+### Backup (NFR-003)
+
+`.github/workflows/backup.yml` runs `pg_dump` (custom format) against Neon, checks it with `pg_restore --list`, uploads `cocktail-party-<UTC timestamp>.dump` to a dedicated private R2 bucket and then deletes dumps older than 14 days (by the timestamp in the key). Like `deploy.yml`, it is manual-only (`workflow_dispatch`) while CD is postponed; the file's header comment shows the `schedule` block to add for the daily run (enabling it is on the pre-launch checklist below). The rows of `session` and `verification` (IP addresses, User-Agents, OAuth state) are left out of the dump. Secrets in the `production` environment:
+
+- `DATABASE_URL`: Neon's direct (non-pooled) connection string
+- `BACKUP_R2_ACCOUNT_ID`, `BACKUP_R2_ACCESS_KEY_ID`, `BACKUP_R2_SECRET_ACCESS_KEY`, `BACKUP_R2_BUCKET`: an R2 API token limited to Object Read & Write on the backup bucket, which must not be the Photo bucket. `BACKUP_R2_BUCKET` is a private bucket: no public access and no custom domain, since the dumps hold every Member's data.
+- Restrict the `production` environment's Deployment branches to `main`, so no other branch can read these secrets.
+
+Restore with `pg_restore --no-owner --dbname "$DATABASE_URL" <file>` into an empty database. Restores are not rehearsed (NFR-003).
+
+### Demo Recipes (DT-002)
+
+`pnpm db:seed:recipes` (after `pnpm db:migrate` and `pnpm db:seed:ingredients`) adds 20 well-known cocktails (16 alcoholic across 6+ Bases and 6-37% ABV, 4 Non-alcoholic) through `createRecipe`, so all of FR-004..007 apply. It is idempotent: a Recipe is skipped when the demo Member already has one with that title. The author is the Member `demo_bartender`, inserted directly without an `account` row (nobody can sign in as it). If `demo_bartender` already exists with an `account` row (a real Member), the script stops instead of posting as them. Mix Ratios are bare parts, scaled down where a part would exceed 99.9.
+
+Each Recipe's Main Photo is a generated gradient card, not a photo of the drink; replace them with real photos if the demo is meant to look real. Photos are stored in R2 with the `R2_*` variables set (the same bucket the app serves). `pnpm db:seed:recipes --no-store` keeps the images in memory instead; it refuses to run unless `DATABASE_URL` is unset or points at localhost, 127.0.0.1 or [::1]: the Recipes then show "写真なし".
+
+### What is still unchecked: do this on a Preview
+
+None of these can be exercised without real credentials. Deploy a Preview with the production-like variables, then:
+
+1. **R2 and `sharp` on Vercel** (also the Known limits above): sign in, create a Recipe with a JPEG that has GPS EXIF (any phone photo), and confirm `POST /api/photos` returns 201, the image shows on the Recipe page, and the stored `*.webp` has no EXIF (`exiftool` on the downloaded file). Then delete the Recipe and check both objects are gone from the bucket.
+2. **Google and LINE login**: sign in with each on the Preview URL (the callback URLs must be registered, see `.env.example`), set a Username, sign out and in again, and confirm one provider cannot reach the other's Member. For LINE, try an account that returns no email.
+3. **Suspension and withdrawal with real sessions**: withdraw a test Member and confirm its photos disappear from R2.
+4. **Demo Recipes**: run `pnpm db:seed:recipes` against the Preview/production database with `R2_*` set and open the top page.
+5. **Backup**: run the Backup workflow by hand, check the object in the backup bucket, and run `pg_restore --list` on a downloaded copy. Then enable the schedule in `backup.yml` before launch, and check that the bucket has no public access or custom domain and that the `production` environment is limited to `main`.
+6. **Terms and Privacy**: fill in `src/lib/legal.ts` (operator name, contact and date are still provisional), have both pages reviewed, and link them from the header or footer.
 
 ## Branches, CI and deploy
 

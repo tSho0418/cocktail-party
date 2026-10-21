@@ -15,6 +15,11 @@ export const ageGateCookieOptions = {
 	sameSite: 'lax'
 } as const;
 
+/** The legal pages stay readable before consenting (a visitor may want to read them first). */
+export const AGE_GATE_EXEMPT_PATHS = ['/terms', '/privacy'];
+
+export const isAgeGateExempt = (pathname: string) => AGE_GATE_EXEMPT_PATHS.includes(pathname);
+
 /** The gate is open until the visitor has the consent cookie. */
 export const isAgeGateOpen = (cookieValue: string | undefined) =>
 	cookieValue !== AGE_GATE_COOKIE_VALUE;
