@@ -75,6 +75,13 @@ export async function upload(tx: Db, actor: Actor) {
 	return key;
 }
 
+/** Records a Member icon upload by `actor` and returns its list key (the key an icon is set with). */
+export async function uploadIcon(tx: Db, actor: Actor) {
+	const id = randomUUID();
+	await recordPhotoUpload(tx, actor.memberId, 'member', id);
+	return `member/${id}/list.webp`;
+}
+
 export const input = (
 	title: string,
 	ingredients: [string, number][],

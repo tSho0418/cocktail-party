@@ -12,7 +12,7 @@ import {
 	recipeStep,
 	report
 } from '#lib/server/db/schema.js';
-import { lockPhotos, recipePhotoId, releaseUnreferenced } from './photos';
+import { lockPhotos, photoId, releaseUnreferenced } from './photos';
 import {
 	recomputeDerived,
 	resolveEffectiveAbv,
@@ -84,7 +84,7 @@ function validateRecipeInput(input: RecipeInput): Result<Required<RecipeInput>, 
 	if (!isKey(input.mainPhotoKey)) return fail('main_photo_required');
 	if (extraPhotoKeys.length > 3) return fail('too_many_photos');
 	if (!extraPhotoKeys.every(isKey)) return fail('photo_key_invalid');
-	if (![input.mainPhotoKey, ...extraPhotoKeys].every((k) => recipePhotoId(k) !== null))
+	if (![input.mainPhotoKey, ...extraPhotoKeys].every((k) => photoId(k, 'recipe') !== null))
 		return fail('photo_key_invalid');
 	if (steps.length < 1 || steps.length > 10) return fail('steps_invalid');
 	if (steps.some((s) => s.length === 0 || charLength(s) > 200)) return fail('steps_invalid');
@@ -193,7 +193,7 @@ export async function createRecipe(
 	if (!v.ok) return v;
 	return db.transaction(async (tx) => {
 		const keys = [v.value.mainPhotoKey, ...v.value.extraPhotoKeys];
-		if (!(await lockPhotos(tx, keys)).ownedBy(actor.memberId, keys))
+		if (!(await lockPhotos(tx, 'recipe', keys)).ownedBy(actor.memberId, keys))
 			return fail('photo_key_invalid');
 		const ings = await loadIngredients(tx, v.value.ingredients);
 		if (!ings.ok) return ings;
@@ -265,7 +265,7 @@ export async function updateRecipe(
 		const before = await photoKeys(tx, recipeId, cur.value.mainPhotoKey);
 		const keys = [v.value.mainPhotoKey, ...v.value.extraPhotoKeys];
 		// One locking pass over old and new photos, so attaching and releasing serialise per photo.
-		const photos = await lockPhotos(tx, [...before, ...keys]);
+		const photos = await lockPhotos(tx, 'recipe', [...before, ...keys]);
 		if (
 			!photos.ownedBy(
 				actor.memberId,
@@ -287,7 +287,7 @@ export async function updateRecipe(
 		return ok({
 			id: recipeId,
 			overrideDiscarded: derived.overrideDiscarded,
-			removedPhotoKeys: await releaseUnreferenced(tx, photos.ids)
+			removedPhotoKeys: await releaseUnreferenced(tx, 'recipe', photos.ids)
 		});
 	});
 }
@@ -352,9 +352,9 @@ export async function deleteRecipe(
 			.update(report)
 			.set({ targetState: 'recipe_deleted' })
 			.where(eq(report.recipeId, recipeId));
-		const photos = await lockPhotos(tx, keys);
+		const photos = await lockPhotos(tx, 'recipe', keys);
 		await tx.delete(recipe).where(eq(recipe.id, recipeId));
-		return ok({ photoKeys: await releaseUnreferenced(tx, photos.ids) });
+		return ok({ photoKeys: await releaseUnreferenced(tx, 'recipe', photos.ids) });
 	});
 }
 
