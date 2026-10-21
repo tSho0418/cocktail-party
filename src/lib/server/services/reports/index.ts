@@ -3,6 +3,7 @@
 // service does), so every caller gets the same rule.
 import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import { member, recipe, report } from '#lib/server/db/schema.js';
+import { decodeTimeCursor, encodeTimeCursor } from '#lib/server/services/cursor.js';
 import { isUuid, type Actor, type Db } from '#lib/server/services/recipes/index.js';
 
 export const REPORT_REASONS = ['inappropriate_photo', 'plagiarism', 'spam', 'other'] as const;
@@ -89,29 +90,6 @@ export type ReportRow = {
 export type AdminError = 'forbidden' | 'not_found';
 
 export const REPORT_PAGE_SIZE = 50;
-export const MAX_REPORT_PAGE_SIZE = 200;
-
-// Newest first by (created_at, id). created_at travels as Postgres text so microseconds survive.
-const TIMESTAMP = /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(\.\d{1,6})?[+-]\d\d(:\d\d)?$/;
-type Cursor = [string, string];
-const encodeCursor = (c: Cursor) => Buffer.from(JSON.stringify(c)).toString('base64url');
-function decodeCursor(raw: string): Cursor | null {
-	try {
-		const c = JSON.parse(Buffer.from(raw, 'base64url').toString());
-		if (
-			Array.isArray(c) &&
-			typeof c[0] === 'string' &&
-			TIMESTAMP.test(c[0]) &&
-			!Number.isNaN(Date.parse(c[0].replace(' ', 'T').replace(/([+-]\d\d)$/, '$1:00'))) &&
-			typeof c[1] === 'string' &&
-			isUuid(c[1])
-		)
-			return [c[0], c[1]];
-	} catch {
-		// fall through
-	}
-	return null;
-}
 
 /** FR-073: newest first, optionally only one status, keyset-paginated by (created_at, id). */
 export async function listReports(
@@ -119,14 +97,13 @@ export async function listReports(
 	actor: Actor,
 	opts: { status?: ReportStatus; cursor?: string | null; limit?: number } = {}
 ): Promise<
-	Result<{ items: ReportRow[]; nextCursor: string | null }, 'forbidden' | 'invalid_cursor'>
+	Result<{ items: ReportRow[]; nextCursor: string | null }, 'forbidden' | 'invalid_query'>
 > {
 	if (!actor.isAdministrator) return fail('forbidden');
 	const limit = opts.limit ?? REPORT_PAGE_SIZE;
-	if (!Number.isInteger(limit) || limit < 1 || limit > MAX_REPORT_PAGE_SIZE)
-		return fail('invalid_cursor');
-	const cursor = opts.cursor ? decodeCursor(opts.cursor) : null;
-	if (opts.cursor && !cursor) return fail('invalid_cursor');
+	const cursor = opts.cursor ? decodeTimeCursor(opts.cursor) : null;
+	if (!Number.isInteger(limit) || limit < 1 || (opts.cursor && !cursor))
+		return fail('invalid_query');
 	const reporter = db
 		.select({ id: member.id, username: member.username })
 		.from(member)
@@ -164,11 +141,9 @@ export async function listReports(
 	const page = rows.slice(0, limit);
 	const last = page.at(-1);
 	return ok({
-		items: page.map(
-			(row) =>
-				Object.fromEntries(Object.entries(row).filter(([k]) => k !== 'createdAtText')) as ReportRow
-		),
-		nextCursor: rows.length > limit && last ? encodeCursor([last.createdAtText, last.id]) : null
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars -- only the cursor needs the text form
+		items: page.map(({ createdAtText: _, ...row }) => row),
+		nextCursor: rows.length > limit && last ? encodeTimeCursor(last.createdAtText, last.id) : null
 	});
 }
 

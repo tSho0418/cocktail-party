@@ -39,7 +39,7 @@ export const reportsRoute = () =>
 				cursor: c.req.query('cursor') || null
 			});
 			if (!r.ok)
-				return r.error === 'invalid_cursor'
+				return r.error === 'invalid_query'
 					? c.json({ error: 'invalid_request' as const }, 400)
 					: c.json({ error: r.error }, statusOf(r.error));
 			return c.json(r.value);

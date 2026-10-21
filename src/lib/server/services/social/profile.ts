@@ -1,9 +1,9 @@
 import { and, eq, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 import { follow, member, recipe, save } from '#lib/server/db/schema.js';
+import { decodeTimeCursor, encodeTimeCursor } from '#lib/server/services/cursor.js';
 import { USERNAME_PATTERN } from '#lib/server/services/members/index.js';
 import {
-	isUuid,
 	likeCountOf,
 	lockPhotos,
 	releaseUnreferenced,
@@ -21,21 +21,7 @@ const charLength = (s: string) => [...s].length;
 
 export type Page<T> = { items: T[]; nextCursor: string | null };
 
-// Newest first by (time, id). The time travels as Postgres text so microseconds survive.
-type Cursor = [string, string];
-const encode = (c: Cursor) => Buffer.from(JSON.stringify(c)).toString('base64url');
-function decode(raw: string | null | undefined): Cursor | null | 'invalid' {
-	if (!raw) return null;
-	try {
-		const c = JSON.parse(Buffer.from(raw, 'base64url').toString());
-		const ts = /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(\.\d{1,6})?[+-]\d\d(:\d\d)?$/;
-		if (Array.isArray(c) && typeof c[0] === 'string' && ts.test(c[0]) && isUuid(c[1]))
-			return [c[0], c[1]];
-	} catch {
-		// fall through
-	}
-	return 'invalid';
-}
+// Newest first by (time, id); the time travels as Postgres text so microseconds survive.
 
 /** Runs `select` newest-first on (`time`, `id`) with keyset paging; a bad cursor yields page one. */
 async function paged<T extends { t: string; i: string }>(
@@ -45,8 +31,7 @@ async function paged<T extends { t: string; i: string }>(
 	limit: number,
 	select: (where: SQL | undefined, order: SQL[], take: number) => Promise<T[]>
 ): Promise<Page<Omit<T, 't' | 'i'>>> {
-	const parsed = decode(cursorRaw);
-	const cursor = parsed === 'invalid' ? null : parsed;
+	const cursor = cursorRaw ? decodeTimeCursor(cursorRaw) : null;
 	const where = cursor
 		? sql`(${time}, ${id}) < (${cursor[0]}::timestamptz, ${cursor[1]}::uuid)`
 		: undefined;
@@ -54,14 +39,9 @@ async function paged<T extends { t: string; i: string }>(
 	const page = rows.slice(0, limit);
 	const last = page.at(-1);
 	return {
-		items: page.map(
-			(row) =>
-				Object.fromEntries(Object.entries(row).filter(([k]) => k !== 't' && k !== 'i')) as Omit<
-					T,
-					't' | 'i'
-				>
-		),
-		nextCursor: rows.length > limit && last ? encode([last.t, last.i]) : null
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars -- t and i only feed the cursor
+		items: page.map(({ t: _t, i: _i, ...row }) => row),
+		nextCursor: rows.length > limit && last ? encodeTimeCursor(last.t, last.i) : null
 	};
 }
 

@@ -31,7 +31,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// A stale or tampered ?cursor shows the first page rather than an error.
 	const first = async () => {
 		const r = await listing(url.searchParams.get('cursor'));
-		return r.ok || r.error !== 'invalid_cursor' ? r : listing(null);
+		return r.ok || r.error !== 'invalid_query' ? r : listing(null);
 	};
 	const [reports, suspended, ingredients] = await Promise.all([
 		first(),

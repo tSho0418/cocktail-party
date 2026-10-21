@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { db } from '#lib/server/db/index.js';
 import { follow, recipe, report } from '#lib/server/db/schema.js';
@@ -270,7 +270,10 @@ describe('GET /api/admin/reports paging', () => {
 		const author = await seedMember(uniq());
 		const reporters = await Promise.all(Array.from({ length: 7 }, () => seedMember(uniq())));
 		const recipeId = await newRecipe(author);
-		const same = new Date('2031-01-01T00:00:00.123456Z');
+		// Differ only below the millisecond, with ties; a cursor that rounded to ms would skip or repeat.
+		const times = [1, 2, 2, 2, 3, 3, 500000].map(
+			(us) => `2031-01-01 00:00:00.${String(123400 + us).slice(0, 6)}+00`
+		);
 		const rows = await db
 			.insert(report)
 			.values(
@@ -280,10 +283,14 @@ describe('GET /api/admin/reports paging', () => {
 					reportedMemberId: author.id,
 					reason: 'spam' as const,
 					status: i % 2 ? ('resolved' as const) : ('open' as const),
-					createdAt: i < 5 ? same : new Date(same.getTime() + 1000 * i)
+					createdAt: sql`${times[i]}::timestamptz`
 				}))
 			)
-			.returning({ id: report.id, status: report.status });
+			.returning({
+				id: report.id,
+				status: report.status,
+				at: sql<string>`${report.createdAt}::text`
+			});
 		const mine = new Set(rows.map((r) => r.id));
 
 		const collect = async (status?: 'open' | 'resolved') => {
@@ -299,8 +306,10 @@ describe('GET /api/admin/reports paging', () => {
 			return seen.filter((id) => mine.has(id));
 		};
 		const all = await collect();
-		expect(all).toHaveLength(7);
-		expect(new Set(all).size).toBe(7);
+		const newestFirst = [...rows]
+			.sort((a, b) => (a.at === b.at ? 0 : a.at < b.at ? 1 : -1) || (a.id < b.id ? 1 : -1))
+			.map((r) => r.id);
+		expect(all).toEqual(newestFirst);
 		const open = await collect('open');
 		const resolved = await collect('resolved');
 		expect(open.sort()).toEqual(
@@ -318,7 +327,17 @@ describe('GET /api/admin/reports paging', () => {
 
 		const first = await (await call(admin, 'GET', '/admin/reports')).json();
 		expect(first).toHaveProperty('nextCursor');
-		for (const bad of ['!!!', btoa('[1,2]'), btoa(JSON.stringify(['x', 'y']))]) {
+		const enc = (c: unknown) => Buffer.from(JSON.stringify(c)).toString('base64url');
+		const id = crypto.randomUUID();
+		for (const bad of [
+			'!!!',
+			btoa('[1,2]'),
+			enc(['x', 'y']),
+			enc(['2031-02-30 00:00:00+00', id]),
+			enc(['2031-13-01 00:00:00+00', id]),
+			enc(['2031-01-01 25:00:00+00', id]),
+			enc(['2031-01-01 00:00:00+99', id])
+		]) {
 			expect((await call(admin, 'GET', `/admin/reports?cursor=${bad}`)).status).toBe(400);
 		}
 	});
