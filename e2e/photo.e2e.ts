@@ -119,7 +119,7 @@ test.describe('PhotoPicker', () => {
 	});
 });
 
-test('POST /api/photos is closed until auth is wired', async ({ request }) => {
+test('POST /api/photos rejects a request without a session with 401', async ({ request }) => {
 	const res = await request.post('/api/photos', {
 		headers: { 'content-type': 'application/octet-stream' },
 		data: Buffer.from([0xff, 0xd8, 0xff])
