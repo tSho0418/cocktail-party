@@ -20,7 +20,7 @@ Member アイコンも同じ検査をする。`updateProfile` は、`member/<uui
 
 ## Consequences
 
-- アップロードしたまま使われなかった写真(入力途中で離脱した、差し替えて保存しなかった、公開に失敗した)は、`created_at` から24時間を過ぎ、どの Recipe もアイコンも参照していなければ、`sweepUnusedUploads`(`pnpm photos:sweep`)が掃除する。行を `FOR UPDATE SKIP LOCKED` でロックして参照を確かめ直し、行を削除してから、コミット後に両方のオブジェクトを削除する。書き込み中の行は飛ばして、次の回に回す。実行は GitHub Actions の `sweep-photos.yml` で、`production` の secrets(`DATABASE_URL`、`R2_*`)がそろうまで手動実行だけにしてある。
+- アップロードしたまま使われなかった写真(入力途中で離脱した、差し替えて保存しなかった、公開に失敗した)は、`created_at` から24時間を過ぎ、どの Recipe もアイコンも参照していなければ、`sweepUnusedUploads`(`pnpm photos:sweep`)が掃除する。行を `FOR UPDATE SKIP LOCKED` でロックして参照を確かめ直し、行を削除してから、コミット後に両方のオブジェクトを削除する。書き込み中の行は飛ばして、次の回に回す。実行は GitHub Actions の `sweep-photos.yml` で、`production` の secrets(`DATABASE_URL`、`R2_*`)がそろうまで手動実行(`main` からだけ。他のブランチから `production` の secrets に届かないようにする)だけにしてある。
 - オブジェクトの削除はコミットの後なので、R2 が失敗すると行は消えたままオブジェクトだけが残る。掃除はそれを数え直さない。
 - このマイグレーションより前に作られた Recipe の鍵は `photo_upload` に無い。`storePhoto` の形(`recipe/<uuid>/{list,detail}.webp`)の鍵なら、編集で今の鍵を送り直す限りそのまま使える。形が違う旧形式の鍵は、編集で `photo_key_invalid` として拒否される(公開前なのでバックフィルせず、該当するデータも無い見込み)。新しく足す鍵は検査される。
 - Recipe の書き込みが、使う写真ごとに行ロックを取る。同じ写真を触る書き込みは直列になるが、1 Recipe の写真は最大4枚で、写真は Member 単位なので競合はまれ。

@@ -304,6 +304,7 @@ describe('profile (FR-054)', () => {
 			const asIcon = (key: string) => updateProfile(tx, alice.memberId, { iconKey: key });
 			expect(await asIcon(bobsIcon)).toEqual({ ok: false, error: 'icon_key_invalid' });
 			expect(await asIcon(unknown)).toEqual({ ok: false, error: 'icon_key_invalid' });
+			expect(await asIcon('')).toEqual({ ok: false, error: 'icon_key_invalid' });
 			// An upload of kind recipe is no icon, even with the member/ prefix swapped in.
 			expect(await asIcon(bobsPhoto.replace('recipe/', 'member/'))).toEqual({
 				ok: false,

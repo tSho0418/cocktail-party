@@ -260,7 +260,7 @@ const UNIQUE_VIOLATION = '23505';
 /**
  * Changes Username (FR-053), bio (FR-054, at most 200 characters; blank clears it) and/or icon
  * in one transaction: any rejected field leaves all of them unchanged. Fields left undefined are
- * untouched; `iconKey: null` removes the icon. A new icon must be an upload (`kind = 'member'`) of
+ * untouched; `iconKey: null` removes the icon; an empty string is an invalid key. A new icon must be an upload (`kind = 'member'`) of
  * this Member (the key it already has stays valid). An icon that is replaced or removed has its
  * upload released in the same transaction; `releasedKeys` are its objects, for the caller to
  * delete from storage after commit.
@@ -276,7 +276,7 @@ export async function updateProfile(
 	if (input.username !== undefined && !USERNAME_PATTERN.test(input.username))
 		return { ok: false, error: 'username_invalid' };
 	if (bio && charLength(bio) > BIO_MAX) return { ok: false, error: 'bio_too_long' };
-	if (input.iconKey && !ICON_KEY.test(input.iconKey))
+	if (input.iconKey !== undefined && input.iconKey !== null && !ICON_KEY.test(input.iconKey))
 		return { ok: false, error: 'icon_key_invalid' };
 	try {
 		return await db.transaction(async (tx) => {

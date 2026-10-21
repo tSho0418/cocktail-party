@@ -64,7 +64,7 @@ async function waitingFor(holderPid: number) {
 
 /**
  * Runs `hold` in a transaction that stays open until `commit()`. `result` resolves once `hold`
- * returned and `pid` is the backend holding its locks. The caller must `release()` in a
+ * returned (rejects with its error if it threw) and `pid` is the backend holding its locks. The caller must `release()` in a
  * `finally`, so a failing assertion cannot leave the transaction (and its row locks) open.
  */
 function holdingTransaction<T>(
@@ -73,12 +73,18 @@ function holdingTransaction<T>(
 	let commit!: () => void;
 	const gate = new Promise<void>((r) => (commit = r));
 	let ready!: (v: { value: T; pid: number }) => void;
-	const held = new Promise<{ value: T; pid: number }>((r) => (ready = r));
+	let failed!: (e: unknown) => void;
+	const held = new Promise<{ value: T; pid: number }>((res, rej) => {
+		ready = res;
+		failed = rej;
+	});
 	const done = db.transaction(async (tx) => {
 		const { rows } = await tx.execute<{ pid: number }>(sql`select pg_backend_pid() as pid`);
 		ready({ value: await hold(tx), pid: rows[0].pid });
 		await gate;
 	});
+	// If `hold` throws, `held` rejects with its error instead of leaving the test waiting.
+	done.catch(failed);
 	return {
 		held,
 		done,
