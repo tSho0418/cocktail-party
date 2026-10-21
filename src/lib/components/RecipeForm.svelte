@@ -140,8 +140,10 @@
 
 	/**
 	 * After a row is removed, focus goes to the row that took its place (else the one before it, else
-	 * the control that adds one) instead of falling to <body>. Call after the splice; rows carry
-	 * `data-focus="<kind>-<index>"`, add controls `data-add="<kind>"` (NFR-005).
+	 * the control that adds one) instead of falling to <body>. Call after the splice. Ingredient and
+	 * photo rows carry `data-focus="<kind>-<index>"` (steps: `step-<index>` id), add controls
+	 * `data-add="<kind>"`. A disabled add control (a photo upload is running) cannot take focus, so
+	 * the section heading, `data-heading="<kind>"`, does (NFR-005).
 	 */
 	async function focusAfterRemove(
 		kind: 'ingredient' | 'step' | 'photo',
@@ -153,8 +155,12 @@
 		const target =
 			row === undefined
 				? document.querySelector<HTMLElement>(`[data-add="${kind}"]`)
-				: document.querySelector<HTMLElement>(`[data-focus="${kind}-${row}"]`);
+				: kind === 'step'
+					? document.getElementById(`step-${row}`)
+					: document.querySelector<HTMLElement>(`[data-focus="${kind}-${row}"]`);
 		(target?.matches('input, button, textarea') ? target : target?.querySelector('input'))?.focus();
+		if (document.activeElement === document.body)
+			document.querySelector<HTMLElement>(`[data-heading="${kind}"]`)?.focus();
 	}
 
 	function removeExtra(i: number) {
@@ -306,7 +312,9 @@
 		</div>
 
 		<div class="flex flex-col gap-2">
-			<p class="text-sm font-medium">追加の写真(任意・{MAX_EXTRA_PHOTOS}枚まで)</p>
+			<p class="text-sm font-medium" tabindex="-1" data-heading="photo">
+				追加の写真(任意・{MAX_EXTRA_PHOTOS}枚まで)
+			</p>
 			<ul class="flex flex-wrap gap-3">
 				{#each values.extraPhotos as photo, i (photo.key)}
 					<li class="flex flex-col items-start gap-1">
@@ -493,8 +501,7 @@
 						rows="2"
 						aria-invalid={stepError ? 'true' : undefined}
 						aria-describedby={stepError ? `step-${i}-error` : undefined}
-						class={input}
-						data-focus="step-{i}"></textarea>
+						class={input}></textarea>
 					<div class="flex items-center gap-2">
 						<span class="text-xs text-gray-500">
 							{[...step.trim()].length} / {MAX_STEP_LENGTH} 字
