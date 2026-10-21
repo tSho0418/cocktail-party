@@ -6,6 +6,31 @@ type Result<T, E extends string> = { ok: true; value: T } | { ok: false; error: 
 const ok = <T>(value: T) => ({ ok: true as const, value });
 const fail = <E extends string>(error: E) => ({ ok: false as const, error });
 
+const FOREIGN_KEY_VIOLATION = '23503';
+
+/**
+ * Runs an INSERT of a Like, Save or Follow whose target was checked a moment ago. False when the
+ * target was deleted in between (a foreign key violation), which is `not_found` like any other
+ * missing target, not a 500. `db` must not be a transaction: Postgres aborts one on this error.
+ */
+async function insertIfTargetExists(insert: PromiseLike<unknown>) {
+	try {
+		await insert;
+		return true;
+	} catch (e) {
+		// drizzle wraps the driver's error; the SQLSTATE is on its `cause`.
+		const cause = e instanceof Error ? e.cause : undefined;
+		if (
+			cause &&
+			typeof cause === 'object' &&
+			'code' in cause &&
+			cause.code === FOREIGN_KEY_VIOLATION
+		)
+			return false;
+		throw e;
+	}
+}
+
 /** The Recipe, unless it is missing or its Member is suspended (FR-075). */
 async function visibleRecipe(db: Db, recipeId: string) {
 	if (!isUuid(recipeId)) return null;
@@ -43,7 +68,10 @@ export async function likeRecipe(
 	const target = await visibleRecipe(db, recipeId);
 	if (!target) return fail('not_found');
 	if (target.memberId === actor.memberId) return fail('own_recipe');
-	await db.insert(like).values({ memberId: actor.memberId, recipeId }).onConflictDoNothing();
+	const inserted = await insertIfTargetExists(
+		db.insert(like).values({ memberId: actor.memberId, recipeId }).onConflictDoNothing()
+	);
+	if (!inserted) return fail('not_found');
 	return ok({ liked: true as const, likeCount: await likeCount(db, recipeId) });
 }
 
@@ -67,7 +95,10 @@ export async function saveRecipe(
 ): Promise<Result<{ saved: true }, 'suspended' | 'not_found'>> {
 	if (actor.suspended) return fail('suspended');
 	if (!(await visibleRecipe(db, recipeId))) return fail('not_found');
-	await db.insert(save).values({ memberId: actor.memberId, recipeId }).onConflictDoNothing();
+	const inserted = await insertIfTargetExists(
+		db.insert(save).values({ memberId: actor.memberId, recipeId }).onConflictDoNothing()
+	);
+	if (!inserted) return fail('not_found');
 	return ok({ saved: true as const });
 }
 
@@ -123,10 +154,13 @@ export async function followMember(
 	const target = await followee(db, username);
 	if (!target) return fail('not_found');
 	if (target.id === actor.memberId) return fail('self_follow');
-	await db
-		.insert(follow)
-		.values({ followerId: actor.memberId, followeeId: target.id })
-		.onConflictDoNothing();
+	const inserted = await insertIfTargetExists(
+		db
+			.insert(follow)
+			.values({ followerId: actor.memberId, followeeId: target.id })
+			.onConflictDoNothing()
+	);
+	if (!inserted) return fail('not_found');
 	return ok({ following: true as const });
 }
 
