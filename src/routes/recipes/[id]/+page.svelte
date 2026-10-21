@@ -127,7 +127,9 @@
 	{#if data.canReport}
 		<section class="mt-10 border-t border-gray-200 pt-4" aria-labelledby="report-heading">
 			{#if form?.reported}
-				<p role="status" class="text-sm text-gray-700">
+				<!-- The form this replaces held focus; SvelteKit focuses [autofocus] after a successful action instead of dropping focus to the top of the page (NFR-005). -->
+				<!-- svelte-ignore a11y_autofocus -->
+				<p role="status" tabindex="-1" autofocus class="text-sm text-gray-700">
 					通報を受け付けました。ありがとうございます。
 				</p>
 			{:else}
