@@ -121,6 +121,8 @@ export async function createAlcoholicIngredient(
 	});
 }
 
+type AbvChange = { ingredient: Ingredient; recomputed: number; discardedOverrides: string[] };
+
 /**
  * FR-015, ADR 0004: change an Ingredient's ABV and, in the same transaction, recompute
  * auto_abv / has_alcohol / abv_override of every Recipe using it (an override outside the new
@@ -128,18 +130,42 @@ export async function createAlcoholicIngredient(
  * Crossing 0% either way is allowed: is_alcoholic is generated and the recompute re-derives
  * has_alcohol. A Base Ingredient cannot go to 0% (Base implies alcoholic, FR-010) and its Base
  * flag is not editable (OOS-007).
+ *
+ * Lock order (README, #45): the Recipe rows, then the Ingredient row, as `updateRecipe` does
+ * (it holds its Recipe while it share-locks the Ingredient). Once the Ingredient row is ours no
+ * Recipe can start using it, so the Recipes read then are the ones to recompute. A Recipe whose
+ * edit added the Ingredient and committed after the first lock is not among the rows held, and
+ * locking it now would be out of order: the transaction ends and starts over, with that Recipe
+ * in the first set.
  */
 export async function updateIngredientAbv(
 	actor: Actor,
 	ingredientId: string,
 	abvPercent: number
-): Promise<Result<{ ingredient: Ingredient; recomputed: number; discardedOverrides: string[] }>> {
+): Promise<Result<AbvChange>> {
 	const denied = checkActor(actor, true);
 	if (denied) return { ok: false, error: denied };
 	if (!isValidAbv(abvPercent)) return { ok: false, error: 'invalid_abv' };
 	if (!isUuid(ingredientId)) return { ok: false, error: 'not_found' };
 
-	return db.transaction(async (tx) => {
+	const result = await db.transaction(async (tx): Promise<Result<AbvChange> | null> => {
+		// Lock affected Recipes in id order so concurrent ABV edits cannot deadlock.
+		const using = () =>
+			tx
+				.select({ id: recipe.id, abvOverride: recipe.abvOverride })
+				.from(recipe)
+				.where(
+					inArray(
+						recipe.id,
+						tx
+							.select({ id: recipeIngredient.recipeId })
+							.from(recipeIngredient)
+							.where(eq(recipeIngredient.ingredientId, ingredientId))
+					)
+				)
+				.orderBy(asc(recipe.id));
+		const held = new Set((await using().for('update')).map((r) => r.id));
+
 		const [current] = await tx
 			.select()
 			.from(ingredient)
@@ -150,27 +176,14 @@ export async function updateIngredientAbv(
 			return { ok: false, error: 'base_requires_alcohol' };
 		}
 
+		const recipes = await using();
+		if (recipes.some((r) => !held.has(r.id))) return null;
+
 		const [updated] = await tx
 			.update(ingredient)
 			.set({ abvPercent })
 			.where(eq(ingredient.id, ingredientId))
 			.returning();
-
-		// Lock affected Recipes in id order so concurrent ABV edits cannot deadlock.
-		const recipes = await tx
-			.select({ id: recipe.id, abvOverride: recipe.abvOverride })
-			.from(recipe)
-			.where(
-				inArray(
-					recipe.id,
-					tx
-						.select({ id: recipeIngredient.recipeId })
-						.from(recipeIngredient)
-						.where(eq(recipeIngredient.ingredientId, ingredientId))
-				)
-			)
-			.orderBy(asc(recipe.id))
-			.for('update');
 		if (recipes.length === 0) {
 			return { ok: true, value: { ingredient: updated, recomputed: 0, discardedOverrides: [] } };
 		}
@@ -214,4 +227,5 @@ export async function updateIngredientAbv(
 			value: { ingredient: updated, recomputed: recipes.length, discardedOverrides }
 		};
 	});
+	return result ?? updateIngredientAbv(actor, ingredientId, abvPercent);
 }

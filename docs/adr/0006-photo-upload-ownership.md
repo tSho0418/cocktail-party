@@ -11,7 +11,7 @@ Member アイコンも同じ検査をする。`updateProfile` は、`member/<uui
 
 編集・削除で Recipe に参照されなくなったアップロードは、同じトランザクションで `photo_upload` の行を削除する。R2 のオブジェクトの削除はコミットの後に行い、失敗してもリクエストは失敗させない。削除は `deleteObjects` に一本化し、呼び出し側(Recipe の編集・削除、`/admin` の Recipe 削除、アイコンの変更、掃除、退会)は参照を確かめ直さない。写真を参照できるのはアップロードした本人だけで、行を削除したトランザクションが参照の有無を確かめ済みか(解放)、本人ごと Recipe とアイコンが消えている(退会)ためである。失敗したキーは1つずつログに残す(行はもう無く、ログがオブジェクトの手がかりの唯一になる)。
 
-ロックの順は、すべての書き込みで **Recipe の行 → `photo_upload` の行(id の昇順、`FOR UPDATE`)→ Member の行** にそろえる(#40)。Recipe の編集・削除は Recipe の行から、作成は Recipe の行がまだ無いので `photo_upload` の行から、アイコンの変更は `photo_upload` の行から Member の行へ、退会は Recipe の行、`photo_upload` の行、Member の行の順に取る。順がそろっているので、同じ Member の退会と Recipe の書き込みが同時に走ってもデッドロックしない。参照の確認と書き込みは、写真の行をロックしてから行う。掃除(`sweepUnusedUploads`)は `photo_upload` の行だけを `SKIP LOCKED` でロックする。
+ロックの順は、すべての書き込みで **Recipe の行 → `photo_upload` の行(id の昇順、`FOR UPDATE`)→ Ingredient の行 → Member の行** にそろえる(#40、#45)。Recipe の編集・削除は Recipe の行から、作成は Recipe の行がまだ無いので `photo_upload` の行から、アイコンの変更は `photo_upload` の行から Member の行へ、退会は Recipe の行、`photo_upload` の行、Member の行の順に取る。Recipe の作成・編集は、`photo_upload` の行のあとで、使う Ingredient の行を `FOR SHARE` で取る(度数の編集を待たせるため)。Ingredient の度数編集(FR-015)は、その Ingredient を使う Recipe の行(id の昇順)から、Ingredient の行の順に取る。Ingredient の行を取ったあとで Recipe を読み直し、間に Ingredient を使い始めた Recipe があれば、順を崩して取らず、トランザクションをやり直す。順がそろっているので、同じ Member の退会と Recipe の書き込み、Recipe の編集と Ingredient の度数編集が同時に走ってもデッドロックしない。参照の確認と書き込みは、写真の行をロックしてから行う。掃除(`sweepUnusedUploads`)は `photo_upload` の行だけを `SKIP LOCKED` でロックする。
 
 ## Considered Options
 
