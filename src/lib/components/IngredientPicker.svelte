@@ -16,6 +16,7 @@
 	let searching = $state(false);
 	let message = $state<string>();
 	let registering = $state(false);
+	let searchInput = $state<HTMLInputElement>();
 	// Latest request wins; a slow earlier answer must not overwrite a newer one.
 	let seq = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -65,6 +66,8 @@
 	}
 
 	function pick(ingredient: IngredientOption) {
+		// The clicked suggestion is about to vanish; keep focus in the picker rather than letting it fall to <body>.
+		searchInput?.focus();
 		onselect(ingredient);
 		query = '';
 		suggestions = [];
@@ -106,6 +109,7 @@
 	<input
 		id="{id}-q"
 		type="search"
+		bind:this={searchInput}
 		bind:value={query}
 		{oninput}
 		{onkeydown}

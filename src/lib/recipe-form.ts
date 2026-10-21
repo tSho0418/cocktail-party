@@ -56,11 +56,16 @@ export type RecipePayload = {
 // Postgres char_length counts code points, JS .length counts UTF-16 units.
 const charLength = (s: string) => [...s].length;
 
+/** NFKC so full-width digits and "．" typed with a Japanese IME ("１２", "１．５") read as ASCII. */
+const typedNumber = (text: string): number | null => {
+	const t = text.normalize('NFKC').trim();
+	return t === '' ? null : Number(t);
+};
+
 /** A typed Mix Ratio (FR-005) as a number, or null when empty or not valid. */
 export function parseMixRatio(text: string): number | null {
-	const t = text.trim();
-	if (t === '') return null;
-	const n = Number(t);
+	const n = typedNumber(text);
+	if (n === null) return null;
 	const v = validateMixRatio(n);
 	return v.ok ? v.value : null;
 }
@@ -70,7 +75,10 @@ export type AlcoholPreview = {
 	counted: number;
 	hasAlcohol: boolean;
 	maxIngredientAbv: number;
-	/** Auto value (FR-020), null until at least one row is complete. */
+	/**
+	 * Auto value (FR-020). Null until at least one row is complete, and while a row with alcohol
+	 * still lacks a valid Mix Ratio: the value would be too low to show.
+	 */
 	autoAbv: number | null;
 	/** 'none' | an override that fits FR-022 | one that does not. */
 	override:
@@ -98,7 +106,7 @@ export function previewAlcohol(
 	// half-typed ratio (backspace, "0" on the way to "0.5") never changes what the override may be.
 	const alcohol = hasAlcohol(selected.map((r) => r.ingredient));
 	const maxIngredientAbv = Math.max(0, ...selected.map((r) => r.ingredient.abvPercent));
-	const typed = overrideText.trim() === '' ? null : Number(overrideText);
+	const typed = typedNumber(overrideText);
 	let override: AlcoholPreview['override'] = { state: 'none' };
 	if (alcohol && typed !== null) {
 		const v = validateAbvOverride({ override: typed, hasAlcohol: true, maxIngredientAbv });
@@ -114,7 +122,10 @@ export function previewAlcohol(
 		const ratio = parseMixRatio(mixRatio);
 		return ratio === null ? [] : [{ ...ingredient, mixRatio: ratio }];
 	});
-	const autoAbv = counted.length > 0 ? recomputeDerived(counted).autoAbv : null;
+	const alcoholPending = selected.some(
+		({ ingredient, mixRatio }) => ingredient.abvPercent > 0 && parseMixRatio(mixRatio) === null
+	);
+	const autoAbv = counted.length > 0 && !alcoholPending ? recomputeDerived(counted).autoAbv : null;
 	return {
 		counted: counted.length,
 		hasAlcohol: alcohol,

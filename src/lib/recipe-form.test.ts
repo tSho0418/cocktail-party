@@ -45,7 +45,9 @@ describe('parseMixRatio (FR-005)', () => {
 	it.each([
 		['0.1', 0.1],
 		['99.9', 99.9],
-		[' 1.5 ', 1.5]
+		[' 1.5 ', 1.5],
+		['１．５', 1.5],
+		['１２', 12]
 	])('accepts %s', (text, n) => expect(parseMixRatio(text)).toBe(n));
 
 	it.each(['', 'abc', '0', '0.05', '100', '1.25', '-1'])('rejects %j', (text) =>
@@ -85,8 +87,24 @@ describe('previewAlcohol (FR-020..024)', () => {
 				override: { state: 'valid', value: 12 }
 			});
 		}
-		expect(previewAlcohol([row(1, gin, ''), row(2, tonic, '3')], '').autoAbv).toBe(0);
+
 		expect(previewAlcohol([row(1, tonic, ''), row(2, tonic, '')], '5').hasAlcohol).toBe(false);
+	});
+
+	it('shows no auto value while an Ingredient with alcohol has no valid Mix Ratio yet', () => {
+		// Only the tonic counts, so 0% would be shown for a drink that does contain gin.
+		for (const ratio of ['', '0', 'x'])
+			expect(previewAlcohol([row(1, gin, ratio), row(2, tonic, '3')], '')).toMatchObject({
+				hasAlcohol: true,
+				autoAbv: null
+			});
+		expect(previewAlcohol([row(1, gin, '1'), row(2, tonic, '')], '').autoAbv).toBe(40);
+	});
+
+	it('reads a full-width override ("１２．５") like the ASCII one', () => {
+		const rows = [row(1, gin, '1'), row(2, tonic, '3')];
+		expect(previewAlcohol(rows, '１２．５').override).toEqual({ state: 'valid', value: 12.5 });
+		expect(previewAlcohol(rows, '１２．５５').override.state).toBe('invalid');
 	});
 
 	it('counts a duplicate Ingredient once', () => {

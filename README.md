@@ -123,7 +123,7 @@ Both pages are public, server-rendered and read through the services directly (n
 - **`/recipes/[id]`** shows the Recipe with its Ingredients (Mix Ratio as a bare number), steps, Alcohol Content ("目安"; an override is labelled "投稿者による修正値") and extra Photos. Unknown, malformed ids and Recipes of suspended Members are 404. OGP: `og:title`, `og:description`, `og:url`, and `og:image` = the Main Photo's `detail.webp` (`twitter:card` `summary_large_image`).
 - Image `alt` is generated from the Recipe title (`<title>の写真`, NFR-005).
 - Photo URLs come from `photoUrl(key, 'list'|'detail')` (`services/images/url.ts`): `R2_PUBLIC_BASE_URL` plus the stored key, with the stored `list.webp`/`detail.webp` key swapped for the wanted size. Without `R2_PUBLIC_BASE_URL` no image is rendered (a "写真なし" box on the list, no `og:image`).
-- The e2e job needs the app database (`DATABASE_URL`, migrated): `e2e/browse.e2e.ts` inserts its own rows with SQL and removes them afterwards. CI starts a Postgres service for it.
+- The e2e job needs the app database (`DATABASE_URL`, migrated): `e2e/browse.e2e.ts` inserts its own rows with SQL and removes them afterwards. `e2e/recipe-form-signed-in.e2e.ts` signs a Member in by inserting a session row and signing the cookie with a fixed test secret (`e2e/signed-in.ts`, handed to the server by `playwright.config.ts`); photo uploads are answered by the spec, since R2 is not reachable. CI starts a Postgres service for it.
 
 ## Branches, CI and deploy
 
