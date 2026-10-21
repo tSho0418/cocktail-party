@@ -1,17 +1,8 @@
 import { error, redirect } from '@sveltejs/kit';
 import { db } from '#lib/server/db/index.js';
-import { defaultStore } from '#lib/server/api/photos.js';
+import { publicUrl } from '#lib/server/services/images/public-url.js';
 import { getRecipeDetail } from '#lib/server/services/recipes/index.js';
 import type { PageServerLoad } from './$types';
-
-/** Preview URL of a stored photo; null when no public base URL is configured (R2_PUBLIC_BASE_URL unset). */
-function previewUrl(key: string) {
-	try {
-		return defaultStore().publicUrl(key);
-	} catch {
-		return null;
-	}
-}
 
 // FR-008: only the owner edits. Signed out goes to log in; someone else's Recipe is 403.
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -25,8 +16,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		initial: {
 			title: recipe.title,
 			description: recipe.description,
-			mainPhoto: { key: recipe.mainPhotoKey, url: previewUrl(recipe.mainPhotoKey) },
-			extraPhotos: recipe.extraPhotoKeys.map((key) => ({ key, url: previewUrl(key) })),
+			mainPhoto: { key: recipe.mainPhotoKey, url: publicUrl(recipe.mainPhotoKey) },
+			extraPhotos: recipe.extraPhotoKeys.map((key) => ({ key, url: publicUrl(key) })),
 			ingredients: recipe.ingredients.map((i, n) => ({
 				rowId: n + 1,
 				ingredient: {
