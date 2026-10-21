@@ -110,8 +110,12 @@ describe('/withdraw action (FR-058)', () => {
 			expect(await db.select().from(member).where(eq(member.id, signedIn.id))).toEqual([]);
 			expect(sessionCookieCleared(cookieWrites)).toBe(true);
 			expect(await resolveMember(headers)).toBeNull();
-			expect(store.objects.size).toBe(6); // left behind, and logged
-			expect(log).toHaveBeenCalled();
+			// Left behind, and every key logged: the rows are gone, so the log is the only record.
+			const leftover = [...store.objects.keys()].sort();
+			expect(leftover).toHaveLength(6);
+			expect(log.mock.calls.map((c) => c.slice(0, 2)).sort()).toEqual(
+				leftover.map((key) => ['photo cleanup failed', key])
+			);
 		} finally {
 			log.mockRestore();
 		}

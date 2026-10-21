@@ -1,7 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { db } from '#lib/server/db/index.js';
 import { defaultStore } from '#lib/server/api/photos.js';
-import { deleteUnreferencedPhotos } from '#lib/server/services/images/cleanup.js';
+import { deleteObjects } from '#lib/server/services/images/delete-objects.js';
 import {
 	createAlcoholicIngredient,
 	updateIngredientAbv
@@ -65,7 +65,7 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const r = await deleteRecipe(db, actor, text(data, 'recipeId'));
 		if (!r.ok) return fail(400, { error: adminErrorMessage(r.error) });
-		await deleteUnreferencedPhotos(defaultStore, r.value.photoKeys);
+		await deleteObjects(defaultStore, r.value.photoKeys);
 	},
 	// FR-075
 	suspend: async ({ locals, request }) => {

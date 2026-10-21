@@ -16,7 +16,7 @@ import {
 	save,
 	session
 } from '#lib/server/db/schema.js';
-import { deleteUnreferencedPhotos } from '#lib/server/services/images/cleanup.js';
+import { deleteObjects } from '#lib/server/services/images/delete-objects.js';
 import { memoryImageStore } from '#lib/server/services/images/store.js';
 import {
 	createRecipe,
@@ -164,7 +164,7 @@ describe('withdrawMember and stored photos (FR-058)', () => {
 		await newRecipe(leaver.id, used);
 		const kept = await objectsOf(other.id, 'recipe');
 
-		await deleteUnreferencedPhotos(() => store, await withdrawMember({ id: leaver.id }));
+		await deleteObjects(() => store, await withdrawMember({ id: leaver.id }));
 
 		expect([...store.objects.keys()].sort()).toEqual([kept, kept.replace('list', 'detail')].sort());
 	});

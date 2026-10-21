@@ -1,7 +1,7 @@
 import { redirect } from '@sveltejs/kit';
 import { defaultStore } from '#lib/server/api/photos.js';
 import { auth } from '#lib/server/auth/index.js';
-import { deleteUnreferencedPhotos } from '#lib/server/services/images/cleanup.js';
+import { deleteObjects } from '#lib/server/services/images/delete-objects.js';
 import { withdrawMember } from '#lib/server/services/members/index.js';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -17,7 +17,7 @@ export const actions: Actions = {
 		// The delete comes first: if it fails the Member stays signed in and can try again.
 		const keys = await withdrawMember({ id: locals.member.id });
 		// Committed from here on, so neither step may fail the request.
-		await deleteUnreferencedPhotos(defaultStore, keys);
+		await deleteObjects(defaultStore, keys);
 		try {
 			// The session row went with the Member; this clears the cookie.
 			await auth().api.signOut({ headers: request.headers });

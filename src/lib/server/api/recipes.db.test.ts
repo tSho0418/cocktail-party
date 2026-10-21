@@ -197,7 +197,7 @@ describe('PUT /api/recipes/:id', () => {
 		expect(del.status).toBe(204);
 		expect((await call(null, 'GET', `/recipes/${id}`)).status).toBe(404);
 		// The orphaned objects were attempted (and logged), not silently skipped.
-		expect(log).toHaveBeenCalledWith('photo cleanup failed', expect.any(Error));
+		expect(log).toHaveBeenCalledWith('photo cleanup failed', expect.any(String), expect.any(Error));
 		log.mockRestore();
 	});
 });
