@@ -10,12 +10,16 @@ let memberId: string;
 const memberIds: string[] = [];
 
 test.beforeAll(async () => {
+	// Leftovers of a run that was killed before its afterAll.
+	// (Own prefix: browse.e2e.ts runs in parallel with `e2e_` Members of its own.)
+	await pool.query(`delete from member where username like 'e2e\\_form\\_%'`);
+	await pool.query(`delete from ingredient where name like 'E2Eジン%' or name like 'E2Eトニック%'`);
 	await seedIngredient(gin, 40);
 	await seedIngredient(tonic, 0);
 });
 
 test.beforeEach(async ({ context }) => {
-	memberId = await signIn(context, `e2e_${randomUUID().slice(0, 8)}`);
+	memberId = await signIn(context, `e2e_form_${randomUUID().slice(0, 8)}`);
 	memberIds.push(memberId);
 });
 

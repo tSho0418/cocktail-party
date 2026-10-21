@@ -50,8 +50,9 @@ describe('parseMixRatio (FR-005)', () => {
 		['１２', 12]
 	])('accepts %s', (text, n) => expect(parseMixRatio(text)).toBe(n));
 
-	it.each(['', 'abc', '0', '0.05', '100', '1.25', '-1'])('rejects %j', (text) =>
-		expect(parseMixRatio(text)).toBeNull()
+	it.each(['', 'abc', '1e1', '0x10', '1.', '.5', '0', '0.05', '100', '1.25', '-1'])(
+		'rejects %j',
+		(text) => expect(parseMixRatio(text)).toBeNull()
 	);
 });
 
@@ -72,9 +73,9 @@ describe('previewAlcohol (FR-020..024)', () => {
 		expect(p.override.state).toBe('none');
 	});
 
-	it('shows nothing until a row has a valid Mix Ratio, and skips incomplete rows', () => {
+	it('shows nothing until every row has a valid Mix Ratio', () => {
 		expect(previewAlcohol([row(1, gin, '')], '').autoAbv).toBeNull();
-		expect(previewAlcohol([row(1, gin, '1'), row(2, tonic, 'x')], '').autoAbv).toBe(40);
+		expect(previewAlcohol([row(1, gin, '1'), row(2, tonic, 'x')], '').autoAbv).toBeNull();
 	});
 
 	it('judges alcohol and the override range by the chosen Ingredients, not their Mix Ratios', () => {
@@ -91,14 +92,14 @@ describe('previewAlcohol (FR-020..024)', () => {
 		expect(previewAlcohol([row(1, tonic, ''), row(2, tonic, '')], '5').hasAlcohol).toBe(false);
 	});
 
-	it('shows no auto value while an Ingredient with alcohol has no valid Mix Ratio yet', () => {
-		// Only the tonic counts, so 0% would be shown for a drink that does contain gin.
+	it('shows no auto value while any row has no valid Mix Ratio yet', () => {
+		// Only one row would count: 0% for a drink with gin, or 40% for gin with an unmeasured tonic.
 		for (const ratio of ['', '0', 'x'])
 			expect(previewAlcohol([row(1, gin, ratio), row(2, tonic, '3')], '')).toMatchObject({
 				hasAlcohol: true,
 				autoAbv: null
 			});
-		expect(previewAlcohol([row(1, gin, '1'), row(2, tonic, '')], '').autoAbv).toBe(40);
+		expect(previewAlcohol([row(1, gin, '1'), row(2, tonic, '')], '').autoAbv).toBeNull();
 	});
 
 	it('reads a full-width override ("１２．５") like the ASCII one', () => {

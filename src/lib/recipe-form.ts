@@ -56,10 +56,11 @@ export type RecipePayload = {
 // Postgres char_length counts code points, JS .length counts UTF-16 units.
 const charLength = (s: string) => [...s].length;
 
-/** NFKC so full-width digits and "．" typed with a Japanese IME ("１２", "１．５") read as ASCII. */
+/** NFKC so full-width digits and "．" typed with a Japanese IME ("１２", "１．５") read as ASCII. Digits and one decimal point only. */
 const typedNumber = (text: string): number | null => {
 	const t = text.normalize('NFKC').trim();
-	return t === '' ? null : Number(t);
+	if (t === '') return null;
+	return /^\d+(\.\d+)?$/.test(t) ? Number(t) : NaN;
 };
 
 /** A typed Mix Ratio (FR-005) as a number, or null when empty or not valid. */
@@ -71,13 +72,11 @@ export function parseMixRatio(text: string): number | null {
 }
 
 export type AlcoholPreview = {
-	/** Rows with a valid Mix Ratio: what the preview is computed from. */
-	counted: number;
 	hasAlcohol: boolean;
 	maxIngredientAbv: number;
 	/**
-	 * Auto value (FR-020). Null until at least one row is complete, and while a row with alcohol
-	 * still lacks a valid Mix Ratio: the value would be too low to show.
+	 * Auto value (FR-020). Null while no row, or any row, still lacks a valid Mix Ratio: a partial
+	 * sum would be wrong.
 	 */
 	autoAbv: number | null;
 	/** 'none' | an override that fits FR-022 | one that does not. */
@@ -91,7 +90,7 @@ export type AlcoholPreview = {
 
 /**
  * FR-020..024 live: the auto value and the verdict on the typed override, through the same
- * rules the server applies on save. Incomplete rows (no valid Mix Ratio yet) are left out.
+ * rules the server applies on save. The auto value waits until every row has a valid Mix Ratio.
  */
 export function previewAlcohol(
 	rows: readonly Pick<IngredientRow, 'ingredient' | 'mixRatio'>[],
@@ -117,17 +116,17 @@ export function previewAlcohol(
 					reason: v.error as 'not_a_number' | 'too_many_decimals' | 'out_of_range'
 				};
 	}
-	// The auto value (FR-020) needs a valid Mix Ratio on the rows it is computed from.
+	// The auto value (FR-020) is shown only once every chosen row has a valid Mix Ratio: a partial
+	// sum would read too high or too low.
 	const counted = selected.flatMap(({ ingredient, mixRatio }) => {
 		const ratio = parseMixRatio(mixRatio);
 		return ratio === null ? [] : [{ ...ingredient, mixRatio: ratio }];
 	});
-	const alcoholPending = selected.some(
-		({ ingredient, mixRatio }) => ingredient.abvPercent > 0 && parseMixRatio(mixRatio) === null
-	);
-	const autoAbv = counted.length > 0 && !alcoholPending ? recomputeDerived(counted).autoAbv : null;
+	const autoAbv =
+		counted.length > 0 && counted.length === selected.length
+			? recomputeDerived(counted).autoAbv
+			: null;
 	return {
-		counted: counted.length,
 		hasAlcohol: alcohol,
 		maxIngredientAbv,
 		autoAbv,

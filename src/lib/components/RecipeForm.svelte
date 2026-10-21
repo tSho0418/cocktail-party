@@ -202,9 +202,9 @@
 			const res = recipeId
 				? await client.api.recipes[':id'].$put({ param: { id: recipeId }, json })
 				: await client.api.recipes.$post({ json });
-			const body = await res.json();
-			if (res.ok && 'id' in body) savedId = body.id;
-			else formError = apiErrorMessage('error' in body ? body.error : undefined);
+			const body = await res.json().catch(() => null);
+			if (res.ok && body && 'id' in body) savedId = body.id;
+			else formError = apiErrorMessage(body && 'error' in body ? body.error : undefined);
 		} catch {
 			formError = '保存できませんでした。通信状況を確認してください。';
 		}
