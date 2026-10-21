@@ -19,7 +19,8 @@
 		"db:up": "node scripts/db.mjs up",
 		"db:down": "docker compose down",
 		"db:reset": "node scripts/db.mjs reset && drizzle-kit migrate",
-		"db:seed:ingredients": "node scripts/seed-ingredients.mjs"
+		"db:seed:ingredients": "node scripts/seed-ingredients.mjs",
+		"photos:sweep": "node scripts/sweep-photos.mjs"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",

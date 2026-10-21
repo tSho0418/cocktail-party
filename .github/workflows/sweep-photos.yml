@@ -1,0 +1,40 @@
+name: Sweep photos
+
+# Daily sweep of unused photo uploads (row and R2 objects; services/images/sweep.ts, ADR 0006).
+# GitHub Actions rather than a Vercel cron: no function to keep, and the backup job (NFR-003)
+# is planned there too (ADR 0001).
+# Required in the `production` environment: DATABASE_URL, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
+# R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_BASE_URL (the same values as the Vercel project).
+# Disabled until those secrets exist: runs only when started by hand from the Actions tab.
+# To enable, add `schedule: [{ cron: '17 3 * * *' }]` under `on:` below.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One sweep at a time; a late run just waits for the previous one.
+concurrency:
+  group: sweep-photos
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm photos:sweep
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}

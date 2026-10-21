@@ -1,5 +1,6 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import * as privateEnv from '$app/env/private';
 import { db } from '#lib/server/db/index.js';
 import { recordPhotoUpload } from '#lib/server/services/recipes/index.js';
 import type { ApiEnv } from './http';
@@ -17,7 +18,8 @@ export const denyAll: MiddlewareHandler = async (c) => c.json({ error: 'unauthor
 
 let r2: ImageStore | undefined;
 // Built on first use so build, tests and the e2e run need no R2 credentials.
-export const defaultStore = () => (r2 ??= r2ImageStore(r2ConfigFromEnv()));
+export const defaultStore = () =>
+	(r2 ??= r2ImageStore(r2ConfigFromEnv(privateEnv as Record<string, string | undefined>)));
 
 const OWNER_KINDS: OwnerKind[] = ['recipe', 'member'];
 

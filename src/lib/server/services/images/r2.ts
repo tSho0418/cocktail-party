@@ -1,5 +1,4 @@
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import * as privateEnv from '$app/env/private';
 import type { ImageStore } from './store';
 
 export type R2Config = {
@@ -10,10 +9,12 @@ export type R2Config = {
 	publicBaseUrl: string;
 };
 
-/** Reads R2_* (declared in src/env.ts); throws naming every missing variable. */
-export function r2ConfigFromEnv(
-	env: Record<string, string | undefined> = privateEnv as Record<string, string | undefined>
-): R2Config {
+/**
+ * Reads R2_* from `env` (the app passes `$app/env/private`, scripts `process.env`; declared in
+ * src/env.ts); throws naming every missing variable. This file stays free of `$app` imports so
+ * scripts can load it.
+ */
+export function r2ConfigFromEnv(env: Record<string, string | undefined>): R2Config {
 	const names = {
 		accountId: 'R2_ACCOUNT_ID',
 		accessKeyId: 'R2_ACCESS_KEY_ID',
