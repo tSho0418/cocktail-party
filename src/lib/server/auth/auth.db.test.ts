@@ -4,67 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { db } from '#lib/server/db/index.js';
 import { account, ingredient, member, recipe, session } from '#lib/server/db/schema.js';
 import { recordPhotoUpload } from '#lib/server/services/recipes/index.js';
-import { auth, resolveMember } from './index';
+import { resolveMember } from './index';
+import { cookiesOf, lineLogin, memberOfAccount, ORIGIN } from './test/line-login';
 import { viaHandle as viaHandleAt } from './test/via-handle';
 
-const ORIGIN = 'http://localhost:5173';
-
-// Stands in for LINE's token endpoint; real Google/LINE OAuth needs credentials (see README).
-const base64url = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
-function stubLineToken(claims: Record<string, unknown>) {
-	const realFetch = globalThis.fetch;
-	vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
-		const url = input instanceof Request ? input.url : String(input);
-		if (!url.startsWith('https://api.line.me/oauth2/v2.1/token')) return realFetch(input, init);
-		const idToken = `${base64url({ alg: 'none' })}.${base64url(claims)}.`;
-		return Response.json({
-			access_token: 'at',
-			token_type: 'Bearer',
-			expires_in: 3600,
-			id_token: idToken
-		});
-	});
-}
 afterEach(() => vi.unstubAllGlobals());
-
-const cookiesOf = (res: Response) =>
-	res.headers
-		.getSetCookie()
-		.map((c) => c.split(';')[0])
-		.join('; ');
-
-/** Runs Better Auth's real sign-in → callback flow for LINE; returns the callback response. */
-async function lineLogin(claims: Record<string, unknown>) {
-	stubLineToken(claims);
-	const start = await auth().handler(
-		new Request(`${ORIGIN}/api/auth/sign-in/social`, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json', origin: ORIGIN },
-			body: JSON.stringify({
-				provider: 'line',
-				callbackURL: '/',
-				newUserCallbackURL: '/welcome',
-				errorCallbackURL: '/login'
-			})
-		})
-	);
-	const { url } = await start.json();
-	const state = new URL(url).searchParams.get('state');
-	return auth().handler(
-		new Request(`${ORIGIN}/api/auth/callback/line?code=c&state=${state}`, {
-			headers: { cookie: cookiesOf(start) }
-		})
-	);
-}
-
-const memberOfAccount = async (accountId: string) =>
-	(
-		await db
-			.select({ member })
-			.from(account)
-			.innerJoin(member, eq(member.id, account.userId))
-			.where(eq(account.accountId, accountId))
-	)[0]?.member;
 
 const viaHandle = (path: string, cookie?: string, init?: RequestInit) =>
 	viaHandleAt(`${ORIGIN}${path}`, cookie, init);
@@ -189,5 +133,19 @@ describe('Username gate', () => {
 		});
 		expect(await (await viaHandle('/welcome', cookie)).text()).toBe('page');
 		expect((await viaHandle('/api/me', cookie)).status).toBe(403);
+	});
+
+	it('still lets such a Member log out or withdraw, and nothing else (FR-052, FR-058)', async () => {
+		const cookie = cookiesOf(await lineLogin({ sub: 'U-gate-withdraw' }));
+		for (const path of ['/welcome', '/logout', '/withdraw', '/withdraw/'])
+			expect(await (await viaHandle(path, cookie)).text(), path).toBe('page');
+		const post = await viaHandle('/withdraw', cookie, { method: 'POST' });
+		expect(await post.text()).toBe('page');
+		// Pages that merely start with an allowed name, and everything else, go to /welcome.
+		for (const path of ['/withdrawn', '/logout-all', '/recipes/new', '/members/someone'])
+			await expect(viaHandle(path, cookie), path).rejects.toMatchObject({
+				status: 303,
+				location: '/welcome'
+			});
 	});
 });
