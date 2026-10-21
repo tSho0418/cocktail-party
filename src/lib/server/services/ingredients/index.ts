@@ -3,6 +3,7 @@
 import { asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../../db';
 import { ingredient, recipe, recipeIngredient } from '../../db/schema';
+import { isUuid } from '../recipes/recipes';
 import { hasAtMostOneDecimal, recomputeDerived } from '#lib/domain/alcohol/index.js';
 import {
 	MAX_NAME_LENGTH,
@@ -136,6 +137,7 @@ export async function updateIngredientAbv(
 	const denied = checkActor(actor, true);
 	if (denied) return { ok: false, error: denied };
 	if (!isValidAbv(abvPercent)) return { ok: false, error: 'invalid_abv' };
+	if (!isUuid(ingredientId)) return { ok: false, error: 'not_found' };
 
 	return db.transaction(async (tx) => {
 		const [current] = await tx

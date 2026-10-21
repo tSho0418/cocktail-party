@@ -3,6 +3,7 @@ import { defaultStore, photosRoute } from './photos';
 import { ingredientsRoute } from './ingredients';
 import { recipesRoute } from './recipes';
 import { socialRoute } from './social';
+import { reportsRoute } from './reports';
 import type { ApiEnv } from './http';
 import { authorizePhotoUpload, requireMember } from '#lib/server/auth/guards.js';
 import type { ImageStore } from '#lib/server/services/images/index.js';
@@ -16,6 +17,7 @@ export const createApp = ({ store = defaultStore }: { store?: () => ImageStore }
 		.route('/recipes', recipesRoute({ store }))
 		.route('/ingredients', ingredientsRoute())
 		.route('/', socialRoute())
+		.route('/', reportsRoute())
 		.get('/me', requireMember, (c) => c.json(c.env.locals.member));
 
 export const app = createApp();
