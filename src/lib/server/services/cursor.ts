@@ -7,7 +7,7 @@ import { isUuid } from '#lib/server/services/recipes/recipes.js';
 const TIMESTAMP =
 	/^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(?:\.\d{1,6})?([+-])(\d\d)(?::(\d\d))?$/;
 
-/** True for a timestamp Postgres will accept: a real calendar date, 24h time, offset under 16h. */
+/** True for a valid date-time in the form Postgres prints for `timestamptz::text` (real calendar date, time of day under 24:00, offset under 16h). */
 export function isTimestampText(s: unknown): s is string {
 	const m = typeof s === 'string' ? TIMESTAMP.exec(s) : null;
 	if (!m) return false;

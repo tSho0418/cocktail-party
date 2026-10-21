@@ -21,9 +21,10 @@ const charLength = (s: string) => [...s].length;
 
 export type Page<T> = { items: T[]; nextCursor: string | null };
 
-// Newest first by (time, id); the time travels as Postgres text so microseconds survive.
-
-/** Runs `select` newest-first on (`time`, `id`) with keyset paging; a bad cursor yields page one. */
+/**
+ * Runs `select` newest-first on (`time`, `id`) with keyset paging; a bad cursor yields page one.
+ * The time travels as Postgres text so microseconds survive.
+ */
 async function paged<T extends { t: string; i: string }>(
 	time: PgColumn,
 	id: PgColumn,
