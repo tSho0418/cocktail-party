@@ -3,7 +3,7 @@ import { db } from '#lib/server/db/index.js';
 import { getRecipeDetail } from '#lib/server/services/recipes/index.js';
 import { submitReport } from '#lib/server/services/reports/index.js';
 import { photoUrl } from '#lib/server/services/images/url.js';
-import { adminErrorMessage } from '#lib/report-messages.js';
+import { adminErrorMessage, reportErrorMessage } from '#lib/report-messages.js';
 import type { Actions, PageServerLoad } from './$types';
 
 // FR-046/062/080: public and always server-rendered, so the body is in the HTML for crawlers
@@ -32,7 +32,7 @@ export const actions: Actions = {
 			params.id,
 			{ reason: String(data.get('reason') ?? ''), detail: String(data.get('detail') ?? '') }
 		);
-		if (!result.ok) return fail(400, { reportError: adminErrorMessage(result.error) });
+		if (!result.ok) return fail(400, { reportError: reportErrorMessage(result.error) });
 		return { reported: true };
 	}
 };

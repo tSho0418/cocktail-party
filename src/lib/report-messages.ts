@@ -31,3 +31,7 @@ export const ADMIN_ERRORS: Record<string, string> = {
 export const adminErrorMessage = (code: unknown) =>
 	(typeof code === 'string' ? ADMIN_ERRORS[code] : undefined) ??
 	'失敗しました。時間をおいてもう一度お試しください。';
+
+// 'duplicate' reads as "name already taken" for an Ingredient; for a Report it means the Member already sent one (FR-071).
+export const reportErrorMessage = (code: unknown) =>
+	code === 'duplicate' ? 'このレシピはすでに通報しています。' : adminErrorMessage(code);

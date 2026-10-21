@@ -8,6 +8,9 @@
 
 	const date = (d: Date | string) =>
 		new Date(d).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+	// Actions post to this page's own URL, so they must carry the filter or the list snaps back to 未対応.
+	const act = (name: string) =>
+		`?/${name}${data.status === 'open' ? '' : `&status=${data.status}`}`;
 	const input = 'rounded border border-gray-300 px-2 py-1 text-sm';
 	const button = 'rounded bg-gray-900 px-3 py-1 text-sm font-medium text-white';
 </script>
@@ -17,7 +20,13 @@
 <main class="mx-auto max-w-4xl p-4 sm:p-8">
 	<h1 class="text-2xl font-bold">管理画面</h1>
 	{#if form?.error}
-		<p role="alert" class="mt-3 rounded bg-red-50 p-2 text-sm text-red-700">{form.error}</p>
+		<!-- Sticky: the forms run down a long page, and a message at the top would be out of sight. -->
+		<p
+			role="alert"
+			class="sticky top-2 z-10 mt-3 rounded border border-red-200 bg-red-50 p-2 text-sm text-red-700"
+		>
+			{form.error}
+		</p>
 	{/if}
 
 	<section class="mt-8" aria-labelledby="reports-heading">
@@ -39,7 +48,7 @@
 		{/if}
 		<ul class="mt-2 space-y-3">
 			{#each data.reports as r (r.id)}
-				<li class="rounded border border-gray-200 p-3 text-sm">
+				<li class="rounded border border-gray-200 p-3 text-sm break-words">
 					<p class="font-medium">
 						{REPORT_STATUS_LABELS[r.status]} ・ {REPORT_REASON_LABELS[r.reason]}
 						<span class="font-normal text-gray-600">・ {date(r.createdAt)}</span>
@@ -62,7 +71,7 @@
 					<p>送信者: {r.reporterUsername ?? '退会済み'}</p>
 					{#if r.detail}<p class="mt-1 whitespace-pre-wrap">{r.detail}</p>{/if}
 					<div class="mt-2 flex flex-wrap items-center gap-2">
-						<form method="POST" action="?/setStatus" use:enhance class="flex gap-1">
+						<form method="POST" action={act('setStatus')} use:enhance class="flex gap-1">
 							<input type="hidden" name="id" value={r.id} />
 							<select name="status" aria-label="状態" class={input}>
 								{#each Object.entries(REPORT_STATUS_LABELS) as [value, label] (value)}
@@ -72,7 +81,7 @@
 							<button class={button}>状態を変更</button>
 						</form>
 						{#if r.targetState === 'live' && r.recipeId}
-							<form method="POST" action="?/deleteRecipe" use:enhance>
+							<form method="POST" action={act('deleteRecipe')} use:enhance>
 								<input type="hidden" name="recipeId" value={r.recipeId} />
 								<button class="rounded bg-red-700 px-3 py-1 text-sm font-medium text-white"
 									>レシピを削除</button
@@ -82,7 +91,7 @@
 						{#if r.reportedUsername && r.targetState !== 'member_withdrawn'}
 							<form
 								method="POST"
-								action={r.reportedSuspended ? '?/unsuspend' : '?/suspend'}
+								action={act(r.reportedSuspended ? 'unsuspend' : 'suspend')}
 								use:enhance
 							>
 								<input type="hidden" name="username" value={r.reportedUsername} />
@@ -112,7 +121,7 @@
 
 	<section class="mt-10" aria-labelledby="suspension-heading">
 		<h2 id="suspension-heading" class="text-lg font-bold">メンバーの停止(Suspension)</h2>
-		<form method="POST" action="?/suspend" use:enhance class="mt-2 flex gap-2">
+		<form method="POST" action={act('suspend')} use:enhance class="mt-2 flex gap-2">
 			<input name="username" required placeholder="Username" aria-label="Username" class={input} />
 			<button class={button}>停止する</button>
 		</form>
@@ -121,7 +130,7 @@
 				<li class="flex items-center gap-3">
 					<span>{m.username}</span>
 					<span class="text-gray-600">{date(m.suspendedAt)}から</span>
-					<form method="POST" action="?/unsuspend" use:enhance>
+					<form method="POST" action={act('unsuspend')} use:enhance>
 						<input type="hidden" name="username" value={m.username} />
 						<button class="text-sm underline">解除</button>
 					</form>
@@ -134,7 +143,12 @@
 
 	<section class="mt-10" aria-labelledby="ingredients-heading">
 		<h2 id="ingredients-heading" class="text-lg font-bold">酒類の材料(Ingredient)</h2>
-		<form method="POST" action="?/createIngredient" use:enhance class="mt-2 flex flex-wrap gap-2">
+		<form
+			method="POST"
+			action={act('createIngredient')}
+			use:enhance
+			class="mt-2 flex flex-wrap gap-2"
+		>
 			<input
 				name="name"
 				required
@@ -166,7 +180,7 @@
 			{#each data.ingredients as ing (ing.id)}
 				<li class="flex items-center gap-3 py-1">
 					<span class="flex-1">{ing.name}{ing.isBaseSpirit ? '(ベース)' : ''}</span>
-					<form method="POST" action="?/updateAbv" use:enhance class="flex items-center gap-1">
+					<form method="POST" action={act('updateAbv')} use:enhance class="flex items-center gap-1">
 						<input type="hidden" name="id" value={ing.id} />
 						<input
 							name="abvPercent"
