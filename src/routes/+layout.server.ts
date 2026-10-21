@@ -1,6 +1,10 @@
 import { AGE_GATE_COOKIE, isAgeGateOpen } from '#lib/age-gate.js';
 import type { LayoutServerLoad } from './$types';
 
-export const load: LayoutServerLoad = ({ cookies }) => ({
-	ageGateOpen: isAgeGateOpen(cookies.get(AGE_GATE_COOKIE))
+export const load: LayoutServerLoad = ({ cookies, locals }) => ({
+	ageGateOpen: isAgeGateOpen(cookies.get(AGE_GATE_COOKIE)),
+	// Only what the header shows; null when signed out.
+	member: locals.member
+		? { username: locals.member.username, isAdministrator: locals.member.isAdministrator }
+		: null
 });
