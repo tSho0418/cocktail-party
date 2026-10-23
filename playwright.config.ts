@@ -35,6 +35,12 @@ export default defineConfig({
 			// Lets e2e/signed-in.ts sign a session cookie the server accepts, without Google/LINE.
 			BETTER_AUTH_SECRET: E2E_AUTH_SECRET,
 			BETTER_AUTH_URL: 'http://localhost:4173',
+			// Dummy OAuth apps: sign-in builds the Google/LINE authorization URL locally and answers 303 to it
+			// (e2e/security-headers.e2e.ts follows it with the provider's host stubbed out).
+			GOOGLE_CLIENT_ID: 'e2e-google',
+			GOOGLE_CLIENT_SECRET: 'e2e-google-secret',
+			LINE_CLIENT_ID: 'e2e-line',
+			LINE_CLIENT_SECRET: 'e2e-line-secret',
 			E2E_HARNESS: '1', // serves /dev/* harness pages; production builds 404 them
 			R2_PUBLIC_BASE_URL: 'https://img.example.invalid' // Photo URLs in rendered pages; never fetched by the specs
 		},
