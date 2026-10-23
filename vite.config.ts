@@ -17,7 +17,10 @@ if (process.env.VITEST_DB) {
 	const url = new URL(process.env.DATABASE_URL_TEST);
 	url.pathname = `/${process.env.TEST_DATABASE_NAME}`;
 	process.env.DATABASE_URL = url.href;
-	// Dummy OAuth apps: the auth db tests stub the provider's token endpoint.
+	// Dummy OAuth apps: the auth db tests stub the provider's token endpoint, and Better Auth
+	// registers a provider only when it has both an id and a secret (CI has no .env).
+	process.env.GOOGLE_CLIENT_ID = 'test-google';
+	process.env.GOOGLE_CLIENT_SECRET = 'test-google-secret';
 	process.env.LINE_CLIENT_ID = 'test-line';
 	process.env.LINE_CLIENT_SECRET = 'test-line-secret';
 }
