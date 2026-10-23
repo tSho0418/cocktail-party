@@ -2,7 +2,7 @@ import { and, eq, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 import { follow, member, recipe, save } from '#lib/server/db/schema.js';
 import { decodeTimeCursor, encodeTimeCursor } from '#lib/server/services/cursor.js';
-import { USERNAME_PATTERN } from '#lib/server/services/members/index.js';
+import { isReservedUsername, USERNAME_PATTERN } from '#lib/server/services/members/index.js';
 import {
 	likeCountOf,
 	lockPhotos,
@@ -234,7 +234,7 @@ export function listFollowing(
 }
 
 export type UpdateProfileError =
-	'bio_too_long' | 'icon_key_invalid' | 'username_invalid' | 'username_taken';
+	'bio_too_long' | 'icon_key_invalid' | 'username_invalid' | 'username_reserved' | 'username_taken';
 
 const UNIQUE_VIOLATION = '23505';
 
@@ -279,10 +279,17 @@ export async function updateProfile(
 				);
 			}
 			const [cur] = await tx
-				.select({ iconKey: member.iconKey })
+				.select({ iconKey: member.iconKey, username: member.username })
 				.from(member)
 				.where(eq(member.id, memberId))
 				.for('update');
+			// A Member who already holds a reserved name may keep it (the edit form resends it).
+			if (
+				input.username !== undefined &&
+				input.username !== cur?.username &&
+				isReservedUsername(input.username)
+			)
+				return { ok: false as const, error: 'username_reserved' as const };
 			if (
 				input.iconKey &&
 				input.iconKey !== cur?.iconKey &&

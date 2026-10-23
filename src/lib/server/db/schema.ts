@@ -1,9 +1,11 @@
 import { sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
+	bigint,
 	boolean,
 	check,
 	index,
+	integer,
 	numeric,
 	pgEnum,
 	pgTable,
@@ -114,6 +116,15 @@ export const verification = pgTable(
 	},
 	(t) => [index('verification_identifier_idx').on(t.identifier)]
 );
+
+// Better Auth's rate limiter (`rateLimit.storage: 'database'`), one row per `<ip>|<path>`;
+// expired rows are pruned by the limiter itself.
+export const rateLimit = pgTable('rate_limit', {
+	id: uuid('id').primaryKey().defaultRandom(),
+	key: text('key').notNull().unique(),
+	count: integer('count').notNull(),
+	lastRequest: bigint('last_request', { mode: 'number' }).notNull()
+});
 
 export const ingredient = pgTable(
 	'ingredient',

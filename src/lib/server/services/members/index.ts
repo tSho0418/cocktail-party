@@ -5,13 +5,40 @@ import { member, photoUpload, recipe, recipePhoto, report } from '#lib/server/db
 /** Same rule as the member_username_format CHECK (FR-053). */
 export const USERNAME_PATTERN = /^[A-Za-z0-9_]{3,20}$/;
 
+/**
+ * Names that read as the operators or the service (impersonation of a public name, not a
+ * privilege). Compared in lower case, like the case-insensitive uniqueness (FR-053). Members
+ * who already hold one keep it; it only cannot be chosen again.
+ */
+const RESERVED_USERNAMES = new Set([
+	'admin',
+	'administrator',
+	'support',
+	'staff',
+	'moderator',
+	'mod',
+	'official',
+	'system',
+	'root',
+	'null',
+	'undefined',
+	'cocktail_party',
+	'cocktailparty',
+	'cocktail_party_official'
+]);
+
+export const isReservedUsername = (username: string) =>
+	RESERVED_USERNAMES.has(username.toLowerCase());
+
 const UNIQUE_VIOLATION = '23505';
 
-export type SetUsernameResult = { ok: true } | { ok: false; error: 'invalid' | 'taken' };
+export type SetUsernameResult =
+	{ ok: true } | { ok: false; error: 'invalid' | 'reserved' | 'taken' };
 
 /** Sets or changes the Username (FR-052/053). Uniqueness ignores case, via the DB index. */
 export async function setUsername(memberId: string, username: string): Promise<SetUsernameResult> {
 	if (!USERNAME_PATTERN.test(username)) return { ok: false, error: 'invalid' };
+	if (isReservedUsername(username)) return { ok: false, error: 'reserved' };
 	try {
 		await db.update(member).set({ username }).where(eq(member.id, memberId));
 		return { ok: true };
