@@ -2,7 +2,7 @@ import { Hono, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import * as privateEnv from '$app/env/private';
 import { db } from '#lib/server/db/index.js';
-import { isOverQuota } from '#lib/server/services/quota/index.js';
+import { pruneQuotaUse, reserveQuota } from '#lib/server/services/quota/index.js';
 import { recordPhotoUpload } from '#lib/server/services/recipes/index.js';
 import type { ApiEnv } from './http';
 import {
@@ -27,8 +27,16 @@ const OWNER_KINDS: OwnerKind[] = ['recipe', 'member'];
 type RecordUpload = (memberId: string, kind: OwnerKind, id: string) => Promise<void>;
 const recordInDb: RecordUpload = (memberId, kind, id) => recordPhotoUpload(db, memberId, kind, id);
 
-type OverQuota = (memberId: string) => Promise<boolean>;
-const overQuotaInDb: OverQuota = (memberId) => isOverQuota(db, memberId, 'photo');
+/** Takes one of the Member's daily uploads; false when they are at the limit (services/quota). */
+type Reserve = (memberId: string) => Promise<boolean>;
+const reserveInDb: Reserve = async (memberId) => {
+	if (!(await reserveQuota(db, memberId, 'photo'))) return false;
+	// Housekeeping only: a failure must not undo an upload that is about to be accepted.
+	await pruneQuotaUse(db, memberId).catch((e) =>
+		console.error('quota_use prune failed', e instanceof Error ? e.name : typeof e)
+	);
+	return true;
+};
 
 /**
  * POST /photos?kind=recipe|member with the raw image as application/octet-stream
@@ -36,26 +44,28 @@ const overQuotaInDb: OverQuota = (memberId) => isOverQuota(db, memberId, 'photo'
  * The Content-Type must be exactly `application/octet-stream` (no parameters); our own client sets it.
  * `authorize` must let only a signed-in Member through: the upload is recorded against that
  * Member (`record`), and a Recipe can only use photos its own Member uploaded.
- * A Member over the daily limit (`overQuota`, services/quota) gets 429 `photo_daily_limit` before
- * the body is read, so a refused upload costs no decoding and no R2 write.
+ * Each request takes one of the Member's daily uploads (`reserve`, services/quota) before the body
+ * is read: over the limit it is 429 `photo_daily_limit` and costs no decoding and no R2 write. The
+ * use stays taken when the upload then fails (413, 415, 422...): a refused photo already cost
+ * CPU, so picking again counts.
  */
 export const photosRoute = ({
 	authorize = denyAll,
 	store = defaultStore,
 	record = recordInDb,
-	overQuota = overQuotaInDb
+	reserve = reserveInDb
 }: {
 	authorize?: MiddlewareHandler;
 	store?: () => ImageStore;
 	record?: RecordUpload;
-	overQuota?: OverQuota;
+	reserve?: Reserve;
 } = {}) =>
 	new Hono<ApiEnv>().post(
 		'/',
 		authorize,
 		// Before bodyLimit, which would read a length-less body to count it.
 		async (c, next) => {
-			if (await overQuota(c.env.locals.member!.id))
+			if (!(await reserve(c.env.locals.member!.id)))
 				return c.json({ error: 'photo_daily_limit' }, 429);
 			await next();
 		},

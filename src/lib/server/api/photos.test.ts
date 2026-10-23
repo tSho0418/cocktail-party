@@ -18,7 +18,7 @@ function setup(authorize: MiddlewareHandler = allow) {
 	};
 	const api = new Hono().route(
 		'/photos',
-		photosRoute({ authorize, store: () => store, record, overQuota: async () => over })
+		photosRoute({ authorize, store: () => store, record, reserve: async () => !over })
 	);
 	const member = { id: 'member-1', username: 'm', isAdministrator: false };
 	const post = (body: BodyInit, headers: Record<string, string> = {}, query = '') =>

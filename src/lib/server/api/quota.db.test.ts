@@ -5,7 +5,12 @@ import { db } from '#lib/server/db/index.js';
 import { photoUpload, quotaUse, recipe } from '#lib/server/db/schema.js';
 import { memoryImageStore } from '#lib/server/services/images/index.js';
 import { jpegWithGps } from '#lib/server/services/images/test-fixtures.js';
-import { DAILY_LIMITS, type QuotaKind } from '#lib/server/services/quota/index.js';
+import {
+	DAILY_LIMITS,
+	pruneAllQuotaUse,
+	type QuotaKind
+} from '#lib/server/services/quota/index.js';
+import { holdingTransaction, waitForLockWaiters } from '#lib/server/db/test/concurrency.js';
 import { createApp } from './app';
 import { call, seedMember, type TestMember } from './test-helpers';
 
@@ -144,15 +149,60 @@ describe('POST /api/photos daily limit', () => {
 		expect((await upload(m, s)).res.status).toBe(429);
 	});
 
-	it('lets simultaneous uploads overshoot by at most the requests in flight, then holds', async () => {
+	it('counts an upload that fails to decode, so garbage cannot use CPU without limit', async () => {
+		const m = await seedMember('photo_garbage');
+		await seedUses(m, 'photo', PHOTO_LIMIT - 1);
+		const s = countingStore();
+		const garbage = await createApp({ store: () => s.store }).request(
+			'/api/photos',
+			{
+				method: 'POST',
+				body: new TextEncoder().encode('<?php echo 1; ?>'),
+				headers: { 'content-type': 'application/octet-stream' }
+			},
+			{ locals: { member: m } }
+		);
+		expect(garbage.status).toBe(422);
+		expect(await usesOf(m, 'photo')).toBe(PHOTO_LIMIT);
+		expect((await upload(m, s)).res.status).toBe(429);
+	});
+
+	it('takes the use before the slow work: uploads that arrive while the last one is in flight are refused', async () => {
 		const m = await seedMember('photo_race');
 		await seedUses(m, 'photo', PHOTO_LIMIT - 1);
-		const burst = await Promise.all(Array.from({ length: 4 }, () => upload(m)));
+		// Every R2 write waits on the gate, so each request that was accepted stays in flight.
+		const gate = Promise.withResolvers<void>();
+		const base = memoryImageStore();
+		let puts = 0;
+		const slow = {
+			...base,
+			async put(key: string, data: Uint8Array, contentType: string) {
+				puts++;
+				await gate.promise;
+				return base.put(key, data, contentType);
+			}
+		};
+		const s = { store: slow, puts: () => puts };
+		const first = upload(m, s);
+		while (puts < 2) await new Promise((r) => setTimeout(r, 10)); // in flight, stuck at R2
+		const others = await Promise.all(Array.from({ length: 7 }, () => upload(m, s)));
+		expect(others.map((r) => r.res.status)).toEqual(Array(7).fill(429));
+		expect(puts).toBe(2); // none of them got as far as R2
+		gate.resolve();
+		expect((await first).res.status).toBe(201);
+		expect(await usesOf(m, 'photo')).toBe(PHOTO_LIMIT);
+		expect(await uploadsOf(m)).toBe(1);
+	});
+
+	it('never lets more than the limit through a burst, whatever the timing', async () => {
+		const m = await seedMember('photo_burst');
+		await seedUses(m, 'photo', PHOTO_LIMIT - 3);
+		const burst = await Promise.all(Array.from({ length: 10 }, () => upload(m)));
 		const accepted = burst.filter((r) => r.res.status === 201).length;
-		expect(accepted).toBeGreaterThanOrEqual(1);
 		expect(burst.every((r) => [201, 429].includes(r.res.status))).toBe(true);
-		expect(await usesOf(m, 'photo')).toBe(PHOTO_LIMIT - 1 + accepted);
-		expect((await upload(m)).res.status).toBe(429);
+		expect(accepted).toBeLessThanOrEqual(3);
+		expect(await usesOf(m, 'photo')).toBe(PHOTO_LIMIT - 3 + accepted);
+		expect(await uploadsOf(m)).toBe(accepted);
 	});
 
 	it('does not give a use back when the photo is released (upload, publish, delete, repeat)', async () => {
@@ -176,99 +226,147 @@ describe('POST /api/photos daily limit', () => {
 });
 
 describe('POST /api/recipes daily limit', () => {
-	let photoKey: string;
-	let m: TestMember;
-	beforeAll(async () => {
-		m = await seedMember('recipe_limit');
-		const { res } = await upload(m);
-		photoKey = (await res.json()).keys.detail;
-	});
+	/** A Member with one stored photo (Recipes may share it, ADR 0006). */
+	async function memberWithPhoto(username: string, opts: { isAdministrator?: boolean } = {}) {
+		const m = await seedMember(username, opts);
+		const key = (await (await upload(m)).res.json()).keys.detail as string;
+		await db.delete(quotaUse).where(eq(quotaUse.memberId, m.id)); // the upload's own use is not under test
+		return { m, key };
+	}
 
-	const publish = (as: TestMember, title: string, extra: object = {}) =>
+	const publish = (as: TestMember, mainPhotoKey: string, title: string, extra: object = {}) =>
 		call(as, 'POST', '/recipes', {
 			title,
-			mainPhotoKey: photoKey,
+			mainPhotoKey,
 			ingredients: [{ ingredientId: gin, mixRatio: 3 }],
 			steps: ['注ぐ'],
 			...extra
 		});
 
 	it('takes the last Recipe of the day, then answers 429 and creates nothing', async () => {
-		// Recipes share one upload (ADR 0006), so one photo serves them all.
+		const { m, key } = await memberWithPhoto('recipe_limit');
 		for (let i = 0; i < RECIPE_LIMIT; i++)
-			expect((await publish(m, `上限${i}${tag}`)).status).toBe(201);
+			expect((await publish(m, key, `上限${i}${tag}`)).status).toBe(201);
 		expect(await recipesOf(m)).toBe(RECIPE_LIMIT);
 
-		const refused = await publish(m, `超過${tag}`);
+		const refused = await publish(m, key, `超過${tag}`);
 		expect(refused.status).toBe(429);
 		expect(await refused.json()).toEqual({ error: 'recipe_daily_limit' });
 		expect(await recipesOf(m)).toBe(RECIPE_LIMIT);
 		expect(await usesOf(m, 'recipe')).toBe(RECIPE_LIMIT);
 	});
 
-	it('still answers a resent idempotency key with its Recipe at the limit, and does not count it', async () => {
-		const k = await seedMember('recipe_resend');
-		const key = randomUUID();
-		const { res: up } = await upload(k);
-		photoKey = (await up.json()).keys.detail;
-		await seedUses(k, 'recipe', RECIPE_LIMIT - 1);
+	it('takes the use before the slow work: publishes that arrive while the last one is in flight are refused', async () => {
+		const { m, key } = await memberWithPhoto('recipe_race');
+		await seedUses(m, 'recipe', RECIPE_LIMIT - 1);
+		// A held lock on the photo makes every request that was accepted wait inside its transaction.
+		const held = holdingTransaction((tx) =>
+			tx
+				.select()
+				.from(photoUpload)
+				.where(eq(photoUpload.id, key.split('/')[1]))
+				.for('update')
+		);
+		try {
+			await held.result;
+			const first = publish(m, key, `競合0${tag}`);
+			await waitForLockWaiters(1); // accepted, in its transaction, waiting for the photo
+			const others = await Promise.all(
+				Array.from({ length: 5 }, (_, i) => publish(m, key, `競合${i + 1}${tag}`))
+			);
+			expect(others.map((r) => r.status)).toEqual(Array(5).fill(429));
+			held.commit();
+			expect((await first).status).toBe(201);
+		} finally {
+			held.commit();
+			await held.done;
+		}
+		expect(await recipesOf(m)).toBe(1);
+		expect(await usesOf(m, 'recipe')).toBe(RECIPE_LIMIT);
+	});
 
-		const first = await publish(k, `再送${tag}`, { idempotencyKey: key });
+	it('gives the use back for a Recipe that was rejected, so a typo costs nothing', async () => {
+		const { m, key } = await memberWithPhoto('recipe_typo');
+		const bad = await call(m, 'POST', '/recipes', {
+			title: `不正${tag}`,
+			mainPhotoKey: key,
+			ingredients: [{ ingredientId: randomUUID(), mixRatio: 3 }],
+			steps: ['注ぐ']
+		});
+		expect(bad.status).toBe(422);
+		expect(await usesOf(m, 'recipe')).toBe(0);
+	});
+
+	it('still answers a resent idempotency key with its Recipe at the limit, and does not count it', async () => {
+		const { m, key } = await memberWithPhoto('recipe_resend');
+		const idem = randomUUID();
+		await seedUses(m, 'recipe', RECIPE_LIMIT - 1);
+
+		const first = await publish(m, key, `再送${tag}`, { idempotencyKey: idem });
 		expect(first.status).toBe(201);
-		const again = await publish(k, `再送${tag}`, { idempotencyKey: key });
+		const again = await publish(m, key, `再送${tag}`, { idempotencyKey: idem });
 		expect(again.status).toBe(201);
 		expect(await again.json()).toEqual(await first.json());
-		expect(await recipesOf(k)).toBe(1);
-		expect(await usesOf(k, 'recipe')).toBe(RECIPE_LIMIT);
+		expect(await recipesOf(m)).toBe(1);
+		expect(await usesOf(m, 'recipe')).toBe(RECIPE_LIMIT);
 		// A different key is a new Recipe, which the limit refuses.
-		expect((await publish(k, `別鍵${tag}`, { idempotencyKey: randomUUID() })).status).toBe(429);
+		expect((await publish(m, key, `別鍵${tag}`, { idempotencyKey: randomUUID() })).status).toBe(
+			429
+		);
 	});
 
 	it('does not count uses older than 24 hours, other Members, or edits', async () => {
-		const k = await seedMember('recipe_window');
-		const { res: up } = await upload(k);
-		photoKey = (await up.json()).keys.detail;
-		await seedUses(k, 'recipe', RECIPE_LIMIT, 25);
-		const made = await publish(k, `窓${tag}`);
+		const { m, key } = await memberWithPhoto('recipe_window');
+		await seedUses(m, 'recipe', RECIPE_LIMIT, 25);
+		const made = await publish(m, key, `窓${tag}`);
 		expect(made.status).toBe(201);
 
-		await seedUses(k, 'recipe', RECIPE_LIMIT - 2); // 1 (new) + 8 = 9 in the window
-		const id = (await made.json()).id;
-		const edit = await call(k, 'PUT', `/recipes/${id}`, {
+		await seedUses(m, 'recipe', RECIPE_LIMIT - 2); // 1 (new) + 8 = 9 in the window
+		const edit = await call(m, 'PUT', `/recipes/${(await made.json()).id}`, {
 			title: `窓改${tag}`,
-			mainPhotoKey: photoKey,
+			mainPhotoKey: key,
 			ingredients: [{ ingredientId: gin, mixRatio: 3 }],
 			steps: ['注ぐ']
 		});
 		expect(edit.status).toBe(200);
-		expect(await usesOf(k, 'recipe')).toBe(RECIPE_LIMIT - 1 + RECIPE_LIMIT); // edit added none
+		expect(await usesOf(m, 'recipe')).toBe(RECIPE_LIMIT - 1 + RECIPE_LIMIT); // the edit added none
 
-		const other = await seedMember('recipe_other');
-		const { res: up2 } = await upload(other);
-		photoKey = (await up2.json()).keys.detail;
-		await seedUses(k, 'recipe', 1); // k is now at the limit; `other` is not
-		expect((await publish(k, `窓超過${tag}`)).status).toBe(429);
-		expect((await publish(other, `他人${tag}`)).status).toBe(201);
+		await seedUses(m, 'recipe', 1); // m is now at the limit; another Member is not
+		expect((await publish(m, key, `窓超過${tag}`)).status).toBe(429);
+		const other = await memberWithPhoto('recipe_other');
+		expect((await publish(other.m, other.key, `他人${tag}`)).status).toBe(201);
 	});
 
 	it('does not give a use back when the Recipes are deleted', async () => {
-		const k = await seedMember('recipe_refund');
+		const m = await seedMember('recipe_refund');
 		for (let i = 0; i < RECIPE_LIMIT; i++) {
 			// Deleting the Recipe releases its photo, so each one needs a new upload.
-			photoKey = (await (await upload(k)).res.json()).keys.detail;
-			const res = await publish(k, `返金${i}${tag}`);
+			const key = (await (await upload(m)).res.json()).keys.detail;
+			const res = await publish(m, key, `返金${i}${tag}`);
 			expect(res.status).toBe(201);
-			expect((await call(k, 'DELETE', `/recipes/${(await res.json()).id}`)).status).toBe(204);
+			expect((await call(m, 'DELETE', `/recipes/${(await res.json()).id}`)).status).toBe(204);
 		}
-		expect(await recipesOf(k)).toBe(0);
-		expect((await publish(k, `返金超過${tag}`)).status).toBe(429);
+		expect(await recipesOf(m)).toBe(0);
+		const key = (await (await upload(m)).res.json()).keys.detail;
+		expect((await publish(m, key, `返金超過${tag}`)).status).toBe(429);
 	});
 
 	it('counts an Administrator like any Member', async () => {
-		const a = await seedMember('admin_recipe', { isAdministrator: true });
-		const { res: up } = await upload(a);
-		photoKey = (await up.json()).keys.detail;
-		await seedUses(a, 'recipe', RECIPE_LIMIT);
-		expect((await publish(a, `管理者${tag}`)).status).toBe(429);
+		const { m, key } = await memberWithPhoto('admin_recipe', { isAdministrator: true });
+		await seedUses(m, 'recipe', RECIPE_LIMIT);
+		expect((await publish(m, key, `管理者${tag}`)).status).toBe(429);
+	});
+});
+
+describe('pruneAllQuotaUse', () => {
+	it('deletes the rows of every Member that are older than 24 hours and keeps the rest', async () => {
+		const [a, b] = [await seedMember('prune_a'), await seedMember('prune_b')];
+		await seedUses(a, 'photo', 3, 25);
+		await seedUses(b, 'recipe', 2, 48);
+		await seedUses(a, 'recipe', 1, 23);
+		expect(await pruneAllQuotaUse(db)).toBeGreaterThanOrEqual(5);
+		expect(await usesOf(a, 'photo')).toBe(0);
+		expect(await usesOf(b, 'recipe')).toBe(0);
+		expect(await usesOf(a, 'recipe')).toBe(1);
 	});
 });

@@ -239,7 +239,7 @@ export const API_ERRORS: Record<string, string> = {
 	unsupported_format: 'JPEG、PNG、WebP の写真を選んでください。',
 	format_mismatch: 'この写真は読み込めませんでした。別の写真を選んでください。',
 	undecodable: 'この写真は読み込めませんでした。別の写真を選んでください。',
-	too_many_pixels: '写真の解像度が高すぎます。画像を縮小するか、別の写真を選んでください。',
+	too_many_pixels: '写真の解像度が高すぎます。別の写真を選んでください。',
 	// 429: the Member's daily limits (services/quota). They lift by themselves within 24 hours.
 	photo_daily_limit:
 		'1日にアップロードできる写真の数の上限に達しました。しばらく(最長24時間)待ってからお試しください。',

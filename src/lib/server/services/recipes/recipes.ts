@@ -12,7 +12,7 @@ import {
 	recipeStep,
 	report
 } from '#lib/server/db/schema.js';
-import { isOverQuota, recordQuotaUse } from '#lib/server/services/quota/index.js';
+import { DAILY_LIMITS, releaseQuota, reserveQuota } from '#lib/server/services/quota/index.js';
 import { lockPhotos, photoId, releaseUnreferenced } from './photos';
 import {
 	recomputeDerived,
@@ -206,18 +206,21 @@ async function writeRecipe(
  * The lookup comes first, before the photo check: the first request has already attached the
  * photos (an edit may even have released them since), and a resend must not fail on that.
  *
- * Every Recipe published is counted in `quota_use`. With `dailyLimit` (POST /api/recipes passes
- * DAILY_LIMITS.recipe), a Member who has already published that many in the last 24 hours gets
- * 'recipe_daily_limit' and nothing is written. The count comes after the idempotent lookup (a
- * resend is not a new Recipe) and is a plain SELECT, so the Lock order is unchanged. Seeding
- * and tests publish without a limit.
+ * Daily limit (#63, services/quota): after the resend lookup and before anything else is done,
+ * the request reserves one of the Member's `dailyLimit` Recipes of the last 24 hours (default
+ * DAILY_LIMITS.recipe; `null` = none, for the seed). The reservation is made on `db` itself, not
+ * inside the transaction below, so it is visible to concurrent requests at once and the limit
+ * holds exactly. A request that ends up publishing nothing (a rejected input, or the answer to
+ * a resend that raced us) gives its reservation back. The reservation takes no lock held into
+ * the transaction, so the Lock order is unchanged. A refused request answers
+ * 'recipe_daily_limit'.
  */
 export async function createRecipe(
 	db: Db,
 	actor: Actor,
 	input: RecipeInput,
 	idempotencyKey?: string,
-	{ dailyLimit }: { dailyLimit?: number } = {}
+	{ dailyLimit = DAILY_LIMITS.recipe }: { dailyLimit?: number | null } = {}
 ): Promise<
 	Result<
 		{ id: string },
@@ -229,54 +232,66 @@ export async function createRecipe(
 		return fail('idempotency_key_invalid');
 	const v = validateRecipeInput(input);
 	if (!v.ok) return v;
-	return db.transaction(async (tx) => {
-		const published = async () => {
-			if (idempotencyKey === undefined) return null;
-			const [row] = await tx
-				.select({ id: recipe.id })
-				.from(recipe)
-				.where(and(eq(recipe.memberId, actor.memberId), eq(recipe.idempotencyKey, idempotencyKey)));
-			return row ? ok({ id: row.id }) : null;
-		};
-		const before = await published();
-		if (before) return before;
-		if (dailyLimit !== undefined && (await isOverQuota(tx, actor.memberId, 'recipe', dailyLimit)))
-			return fail('recipe_daily_limit');
-		const keys = [v.value.mainPhotoKey, ...v.value.extraPhotoKeys];
-		if (!(await lockPhotos(tx, 'recipe', keys)).ownedBy(actor.memberId, keys))
-			return fail('photo_key_invalid');
-		const ings = await loadIngredients(tx, v.value.ingredients);
-		if (!ings.ok) return ings;
-		const derived = recomputeDerived(ings.value);
-		let override: number | null = null;
-		if (v.value.abvOverride != null) {
-			const o = checkOverride(v.value.abvOverride, derived);
-			if (!o.ok) return o;
-			override = o.value;
-		}
-		const id = await writeRecipe(
-			tx,
-			null,
-			actor.memberId,
-			v.value,
-			ings.value,
-			derived,
-			override,
-			idempotencyKey ?? null
-		);
-		if (id !== null) {
-			await recordQuotaUse(tx, actor.memberId, 'recipe');
-			return ok({ id });
-		}
-		// A request with the same key committed first (our INSERT waited for its transaction, which
-		// holds every lock it needed already, so this wait cannot form a cycle): answer with its Recipe.
-		const existing = await published();
-		if (!existing)
-			throw new Error(
-				`recipe insert hit no row for idempotency key ${idempotencyKey} but no Recipe has it`
+	const published = async (d: Db) => {
+		if (idempotencyKey === undefined) return null;
+		const [row] = await d
+			.select({ id: recipe.id })
+			.from(recipe)
+			.where(and(eq(recipe.memberId, actor.memberId), eq(recipe.idempotencyKey, idempotencyKey)));
+		return row ? ok({ id: row.id }) : null;
+	};
+	// A resend is answered before the limit: it publishes nothing, so it must not be refused for it.
+	const resent = await published(db);
+	if (resent) return resent;
+	const reservation =
+		dailyLimit === null ? null : await reserveQuota(db, actor.memberId, 'recipe', dailyLimit);
+	if (dailyLimit !== null && !reservation) return fail('recipe_daily_limit');
+	let created = false;
+	try {
+		const result = await db.transaction(async (tx) => {
+			const before = await published(tx);
+			if (before) return before;
+			const keys = [v.value.mainPhotoKey, ...v.value.extraPhotoKeys];
+			if (!(await lockPhotos(tx, 'recipe', keys)).ownedBy(actor.memberId, keys))
+				return fail('photo_key_invalid');
+			const ings = await loadIngredients(tx, v.value.ingredients);
+			if (!ings.ok) return ings;
+			const derived = recomputeDerived(ings.value);
+			let override: number | null = null;
+			if (v.value.abvOverride != null) {
+				const o = checkOverride(v.value.abvOverride, derived);
+				if (!o.ok) return o;
+				override = o.value;
+			}
+			const id = await writeRecipe(
+				tx,
+				null,
+				actor.memberId,
+				v.value,
+				ings.value,
+				derived,
+				override,
+				idempotencyKey ?? null
 			);
-		return existing;
-	});
+			if (id !== null) {
+				created = true;
+				return ok({ id });
+			}
+			// A request with the same key committed first (our INSERT waited for its transaction, which
+			// holds every lock it needed already, so this wait cannot form a cycle): answer with its Recipe.
+			const existing = await published(tx);
+			if (!existing)
+				throw new Error(
+					`recipe insert hit no row for idempotency key ${idempotencyKey} but no Recipe has it`
+				);
+			return existing;
+		});
+		if (!created && reservation) await releaseQuota(db, reservation).catch(() => {});
+		return result;
+	} catch (e) {
+		if (reservation) await releaseQuota(db, reservation).catch(() => {});
+		throw e;
+	}
 }
 
 /** Locks the Recipe row and checks the actor may change it. */
