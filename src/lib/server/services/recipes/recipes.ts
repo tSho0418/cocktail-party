@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import type { PgDatabase } from 'drizzle-orm/pg-core';
 import type { NodePgQueryResultHKT } from 'drizzle-orm/node-postgres';
 import * as schema from '#lib/server/db/schema.js';
@@ -158,12 +158,17 @@ async function writeRecipe(
 	};
 	let id: string;
 	if (recipeId == null) {
-		// The only unique index an insert can hit is the partial (member_id, key) one, so a conflict
-		// means a POST with this key committed first: no row back, and the caller answers with it.
+		// Only the idempotency key's partial unique index is the conflict target: a conflict means a
+		// POST with this key committed first (no row back; the caller answers with its Recipe). Any
+		// other unique violation is not ours to swallow and surfaces as an error. drizzle writes
+		// `where` (not `targetWhere`) into ON CONFLICT ... DO NOTHING.
 		const [row] = await tx
 			.insert(recipe)
 			.values({ ...values, memberId, idempotencyKey })
-			.onConflictDoNothing()
+			.onConflictDoNothing({
+				target: [recipe.memberId, recipe.idempotencyKey],
+				where: isNotNull(recipe.idempotencyKey)
+			})
 			.returning({ id: recipe.id });
 		if (!row) return null;
 		id = row.id;
@@ -245,8 +250,14 @@ export async function createRecipe(
 			idempotencyKey ?? null
 		);
 		if (id !== null) return ok({ id });
-		// A request with the same key committed first (our INSERT waited for it): answer with its Recipe.
-		return (await published())!;
+		// A request with the same key committed first (our INSERT waited for its transaction, which
+		// holds every lock it needed already, so this wait cannot form a cycle): answer with its Recipe.
+		const existing = await published();
+		if (!existing)
+			throw new Error(
+				`recipe insert hit no row for idempotency key ${idempotencyKey} but no Recipe has it`
+			);
+		return existing;
 	});
 }
 

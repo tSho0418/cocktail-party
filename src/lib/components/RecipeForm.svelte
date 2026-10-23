@@ -241,7 +241,7 @@
 				const body = JSON.stringify(json);
 				if (attempt?.body !== body)
 					// Older browsers (and non-secure origins) lack randomUUID: publish without a key.
-					attempt = { body, key: 'randomUUID' in crypto ? crypto.randomUUID() : undefined };
+					attempt = { body, key: globalThis.crypto?.randomUUID?.() };
 				res = await client.api.recipes.$post({ json: { ...json, idempotencyKey: attempt.key } });
 			}
 			const body = await res.json().catch(() => null);

@@ -6,8 +6,10 @@
 
 - フォームは送信ごとに UUID を作って付ける。直前の送信と同じ内容の再送(失敗した、応答が届かなかった)は同じキー、内容を変えて送り直すときは新しいキーにする。内容を変えたものは別の Recipe なので、前のキーで既存の Recipe を返してはいけない。
 - `recipe.idempotency_key`(uuid、NULL 可)に保存し、`(member_id, idempotency_key)` の部分ユニークインデックス(キーが NULL でない行だけ)を張る。キーは Member ごとに閉じるので、別の Member のキーと重なっても互いに何も分からず、他人の Recipe が返ることも無い。
+- 衝突の対象は (member_id, idempotency_key) の部分インデックスだけ(`ON CONFLICT (member_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`)。ほかのユニーク違反は握りつぶさず、例外として表に出る。
 - 同じ Member の同じキーの再送は、新しい Recipe を作らず、最初のリクエストが公開した Recipe の `{ id }` を、最初と同じ 201 で返す。クライアントは最初の応答と区別せずに済む。同時の2リクエストはユニークインデックスで1件になり、後から来たほうの INSERT(`ON CONFLICT DO NOTHING`)は先のコミットを待って、先の Recipe を返す。500 にはならない。
 - キーの照合は `createRecipe` の最初に行い、写真の検査(`photo_upload` のロック)より前に置く。最初のリクエストで写真は使われており、その後の編集で解放されていることもあるので、先に写真を調べると再送が `photo_key_invalid`(422)になる。照合は行ロックを取らない SELECT なので、ロックの順(Recipe → `photo_upload` → Ingredient → Member、ADR 0006)は変わらない。
+- 同じキーの2リクエストが同時に来ると、INSERT で負けた側は、勝った側のトランザクションが終わるまで待つ(ユニークインデックスが勝った側の xid を待つ)。勝った側は必要なロックをすべて取り終えてから INSERT しているので、この待ちが勝った側を待たせることは無く、サイクルにならない。写真が同じ場合は、負けた側は先の `lockPhotos` で待つので、INSERT まで進まない。勝った側が ROLLBACK したときは、負けた側の INSERT がそのまま成功して自分の Recipe を作る。
 - 照合では内容を比べない。同じキーなら、本文が違っても最初の Recipe を返す。キーを使い回すのはフォームだけで、内容を変えれば新しいキーを作る。
 - キーが UUID の形でなければ 422 `idempotency_key_invalid`、文字列でなければ 400。キーを送らない古いクライアントとシードは、これまでどおり毎回公開する(列は NULL)。
 
@@ -22,5 +24,6 @@
 ## Consequences
 
 - 公開した Recipe を削除したあとに、同じキーで再送すると、新しい Recipe が公開される(行ごとキーが無くなる)。フォームは成功したら画面を離れるので、実際には起きにくい。
+- マイグレーションの `CREATE UNIQUE INDEX` は `CONCURRENTLY` ではない。今の件数では問題ないが、`recipe` が増えたら `CONCURRENTLY` 化を検討する。
 - キーが無いリクエストの重複は、これまでどおり防げない。
 - 古いブラウザや非セキュアなオリジンで `crypto.randomUUID` が無いと、フォームはキーを付けずに送る(重複防止は効かないが、公開はできる)。
