@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { count, eq, gt, inArray, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { db } from '../../db';
 import { ingredient, member, recipe, recipeIngredient } from '../../db/schema';
 import { seedIngredients } from '../../db/seed/ingredients';
@@ -21,11 +21,14 @@ let admin: Actor;
 let memberActor: Actor;
 
 beforeAll(async () => {
-	const [a, m] = await db
-		.insert(member)
-		.values([{ isAdministrator: true }, {}])
-		.returning();
+	const [a] = await db.insert(member).values({ isAdministrator: true }).returning();
 	admin = { memberId: a.id, isAdministrator: true };
+});
+
+// A fresh Member each test: one that registers a few 0% Ingredients would otherwise run into the
+// daily limit (#64) in whichever test comes next.
+beforeEach(async () => {
+	const [m] = await db.insert(member).values({}).returning();
 	memberActor = { memberId: m.id, isAdministrator: false };
 });
 

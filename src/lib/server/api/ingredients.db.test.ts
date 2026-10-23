@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { MAX_ZERO_ABV_INGREDIENTS_PER_DAY } from '#lib/domain/ingredient-limits.js';
 import { MAX_NAME_LENGTH } from '#lib/server/services/ingredients/name.js';
 import { MAX_JSON_BYTES } from './http';
@@ -12,8 +12,12 @@ const tag = randomUUID().slice(0, 8);
 
 beforeAll(async () => {
 	admin = await seedMember('admin_ing', { isAdministrator: true });
-	alice = await seedMember('alice_ing');
 	noName = await seedMember(null);
+});
+
+// A fresh Member each test, so registrations never run into the daily limit (#64) of a later test.
+beforeEach(async () => {
+	alice = await seedMember(`al_${randomUUID().slice(0, 8)}`);
 });
 
 describe('POST /api/ingredients', () => {

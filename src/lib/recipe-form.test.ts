@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	apiErrorMessage,
 	hasErrors,
 	parseMixRatio,
 	previewAlcohol,
@@ -9,6 +10,10 @@ import {
 	type IngredientOption,
 	type IngredientRow
 } from './recipe-form';
+import {
+	MAX_ZERO_ABV_INGREDIENTS_PER_DAY,
+	MAX_ZERO_ABV_INGREDIENTS_TOTAL
+} from './domain/ingredient-limits';
 
 const gin: IngredientOption = { id: 'gin', name: 'ジン', abvPercent: 40, isBaseSpirit: true };
 const vermouth: IngredientOption = {
@@ -198,5 +203,18 @@ describe('toPayload', () => {
 		expect(
 			toPayload(valid({ ingredients: [row(1, tonic, '1')], abvOverride: '12.5' })).abvOverride
 		).toBeNull();
+	});
+});
+
+describe('apiErrorMessage for the Ingredient registration limits (#64)', () => {
+	it('tells the Member which limit they hit and what to do, not the generic failure', () => {
+		const generic = apiErrorMessage(undefined);
+		const daily = apiErrorMessage('ingredient_daily_limit');
+		const total = apiErrorMessage('ingredient_total_limit');
+		expect(daily).not.toBe(generic);
+		expect(total).not.toBe(generic);
+		expect(daily).toContain(`${MAX_ZERO_ABV_INGREDIENTS_PER_DAY}`);
+		expect(total).toContain(`${MAX_ZERO_ABV_INGREDIENTS_TOTAL}`);
+		expect(total).toContain('選んで'); // pick an existing one: waiting will not help
 	});
 });

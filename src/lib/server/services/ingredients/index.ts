@@ -1,6 +1,6 @@
 // Ingredient master (FR-010–015). Every write takes the acting Member explicitly; callers
 // (load functions, Hono routes) resolve it from the session.
-import { asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, notExists, sql } from 'drizzle-orm';
 import { db } from '../../db';
 import { ingredient, recipe, recipeIngredient } from '../../db/schema';
 import { isUuid, type Db } from '../recipes/recipes';
@@ -78,6 +78,43 @@ function checkActor(actor: Actor, adminOnly: boolean): IngredientError | null {
 	return null;
 }
 
+/** Serialises one Member's Ingredient creates (and their withdrawal); taken before any other lock. */
+export const lockIngredientQuota = (tx: Tx, memberId: string) =>
+	tx.execute(
+		sql`SELECT pg_advisory_xact_lock(hashtext('ingredient_quota'), hashtext(${memberId}))`
+	);
+
+/**
+ * Withdrawal (#64): `ingredient.created_by` goes null with the Member, which would reset their
+ * limit for the next account and leave unused rows for ever. The 0% Ingredients they registered
+ * are therefore locked (after the uploads, before the `member` row: README, Lock order) ...
+ */
+export async function lockRegisteredIngredients(tx: Tx, memberId: string): Promise<string[]> {
+	const rows = await tx
+		.select({ id: ingredient.id })
+		.from(ingredient)
+		.where(and(eq(ingredient.createdBy, memberId), eq(ingredient.abvPercent, 0)))
+		.orderBy(asc(ingredient.id))
+		.for('update');
+	return rows.map((r) => r.id);
+}
+
+/** ... and, once the Member's Recipes are gone, deleted unless a Recipe of someone else uses them. */
+export async function deleteUnusedIngredients(tx: Tx, ids: string[]) {
+	if (ids.length === 0) return;
+	await tx.delete(ingredient).where(
+		and(
+			inArray(ingredient.id, ids),
+			notExists(
+				tx
+					.select({ one: sql`1` })
+					.from(recipeIngredient)
+					.where(eq(recipeIngredient.ingredientId, ingredient.id))
+			)
+		)
+	);
+}
+
 /**
  * FR-012 lets a Member add 0% Ingredients unreviewed, so each Member may register only so many
  * (`#lib/domain/ingredient-limits`): counted from `created_by`, over the last 24 hours and in
@@ -115,11 +152,7 @@ async function insertIngredient(
 	return db.transaction(async (tx) => {
 		// Serialise one Member's creates, so the limit cannot be passed by simultaneous requests.
 		// The two-int form is a different lock space from the one-bigint name lock below.
-		if (limited) {
-			await tx.execute(
-				sql`SELECT pg_advisory_xact_lock(hashtext('ingredient_quota'), hashtext(${actor.memberId}))`
-			);
-		}
+		if (limited) await lockIngredientQuota(tx, actor.memberId);
 		// Serialise creates of the same key: the DB's unique(name) only catches byte-equal names.
 		await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${key}))`);
 		const similar = await suggestSimilar(name, 5, tx);

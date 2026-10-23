@@ -310,6 +310,14 @@ test('an unused 0% Ingredient is deleted after confirming, and one a Recipe uses
 	await expect(row(unused)).toHaveCount(0);
 	expect((await pool.query(`select 1 from ingredient where name = $1`, [unused])).rowCount).toBe(0);
 	await expect(page.getByRole('alert')).toHaveCount(0);
+
+	// The 0% list is searched by name; an action keeps the search.
+	await page.getByLabel('0% の材料を名前で探す').fill(used);
+	await page.getByRole('button', { name: '探す' }).click();
+	await expect(page).toHaveURL(/q=/);
+	await expect(row(used)).toHaveCount(1);
+	await expect(page.getByText('1 件', { exact: true })).toBeVisible();
+	await expect(page.getByLabel('0% の材料を名前で探す')).toHaveValue(used);
 });
 
 test('a Member gets 403 on /admin, and a signed-out visitor is sent to log in (FR-077)', async ({

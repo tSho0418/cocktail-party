@@ -1,6 +1,6 @@
 import { isHttpError, isRedirect } from '@sveltejs/kit';
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, like } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { db } from '#lib/server/db/index.js';
 import { ingredient, member, recipe, recipeIngredient, report } from '#lib/server/db/schema.js';
@@ -206,13 +206,48 @@ describe('/admin Ingredient deletion (#64)', () => {
 		expect(r.data.error).toContain('使われている');
 		expect(await exists(id)).toBe(true);
 		const listed = (
-			(await loadAs(admin)) as { ingredients: { id: string; inUse: boolean }[] }
-		).ingredients.find((i) => i.id === id);
+			(await loadAs(admin)) as { ingredients: { zero: { id: string; inUse: boolean }[] } }
+		).ingredients.zero.find((i) => i.id === id);
 		expect(listed?.inUse).toBe(true);
 	});
 
 	it('answers an unknown or malformed id with an error, not a 500', async () => {
 		for (const id of [randomUUID(), 'not-a-uuid', ''])
 			expect(await act('deleteIngredient', admin, { id })).toMatchObject({ status: 400 });
+	});
+
+	it('lists the alcoholic Ingredients whole, and the 0% ones by ?q= and cut to 50 (#64)', async () => {
+		type Listing = {
+			q: string;
+			ingredients: {
+				alcoholic: { name: string; abvPercent: number }[];
+				zero: { name: string }[];
+				zeroTotal: number;
+			};
+		};
+		const names = Array.from({ length: 55 }, (_, i) => `大量${tag}${String(i).padStart(2, '0')}`);
+		await db.insert(ingredient).values(names.map((name) => ({ name, abvPercent: 0 })));
+		await db.insert(ingredient).values({ name: `大量酒${tag}`, abvPercent: 40 });
+		try {
+			const all = (await loadAs(admin)) as Listing;
+			expect(all.ingredients.zero).toHaveLength(50);
+			expect(all.ingredients.zeroTotal).toBeGreaterThanOrEqual(55);
+			expect(all.ingredients.alcoholic.map((i) => i.name)).toContain(`大量酒${tag}`);
+			expect(all.ingredients.alcoholic.every((i) => i.abvPercent > 0)).toBe(true);
+
+			// Matched like duplicate detection: width and case do not matter; the alcoholic ones are not searched.
+			const found = (await loadAs(admin, `?q=${encodeURIComponent(`大量${tag}5`)}`)) as Listing;
+			expect(found.ingredients.zero.map((i) => i.name)).toEqual(names.slice(50));
+			expect(found.ingredients.zeroTotal).toBe(5);
+			expect(found.q).toBe(`大量${tag}5`);
+			expect(found.ingredients.alcoholic.map((i) => i.name)).toContain(`大量酒${tag}`);
+			const none = (await loadAs(
+				admin,
+				'?q=%E5%AD%98%E5%9C%A8%E3%81%97%E3%81%AA%E3%81%84zz'
+			)) as Listing;
+			expect(none.ingredients).toMatchObject({ zero: [], zeroTotal: 0 });
+		} finally {
+			await db.delete(ingredient).where(like(ingredient.name, `大量%${tag}%`));
+		}
 	});
 });

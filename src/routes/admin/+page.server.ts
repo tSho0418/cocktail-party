@@ -37,14 +37,15 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const [reports, suspended, ingredients] = await Promise.all([
 		first(),
 		listSuspendedMembers(db, actor),
-		listIngredientsWithAbv(db)
+		listIngredientsWithAbv(db, url.searchParams.get('q') ?? '')
 	]);
 	return {
 		status,
 		reports: reports.ok ? reports.value.items : [],
 		nextCursor: reports.ok ? reports.value.nextCursor : null,
 		suspended: suspended.ok ? suspended.value : [],
-		ingredients
+		ingredients,
+		q: url.searchParams.get('q') ?? ''
 	};
 };
 
