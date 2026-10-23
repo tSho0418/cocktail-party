@@ -144,7 +144,8 @@ async function writeRecipe(
 	v: Required<RecipeInput>,
 	ings: { name: string }[],
 	derived: ReturnType<typeof recomputeDerived>,
-	abvOverride: number | null
+	abvOverride: number | null,
+	idempotencyKey: string | null = null
 ) {
 	const values = {
 		title: v.title,
@@ -157,10 +158,15 @@ async function writeRecipe(
 	};
 	let id: string;
 	if (recipeId == null) {
-		[{ id }] = await tx
+		// The only unique index an insert can hit is the partial (member_id, key) one, so a conflict
+		// means a POST with this key committed first: no row back, and the caller answers with it.
+		const [row] = await tx
 			.insert(recipe)
-			.values({ ...values, memberId })
+			.values({ ...values, memberId, idempotencyKey })
+			.onConflictDoNothing()
 			.returning({ id: recipe.id });
+		if (!row) return null;
+		id = row.id;
 	} else {
 		id = recipeId;
 		await tx.update(recipe).set(values).where(eq(recipe.id, id));
@@ -186,16 +192,36 @@ async function writeRecipe(
 	return id;
 }
 
-/** FR-001: publish a Recipe; derived Alcohol columns are stored in the same transaction (ADR 0004). */
+/**
+ * FR-001: publish a Recipe; derived Alcohol columns are stored in the same transaction (ADR 0004).
+ *
+ * `idempotencyKey` (a UUID the client makes per attempt, ADR 0007) makes a resent request answer
+ * with the Recipe the first one published instead of publishing another. Keys are per Member.
+ * The lookup comes first, before the photo check: the first request has already attached the
+ * photos (an edit may even have released them since), and a resend must not fail on that.
+ */
 export async function createRecipe(
 	db: Db,
 	actor: Actor,
-	input: RecipeInput
-): Promise<Result<{ id: string }, RecipeInputError | 'suspended'>> {
+	input: RecipeInput,
+	idempotencyKey?: string
+): Promise<Result<{ id: string }, RecipeInputError | 'suspended' | 'idempotency_key_invalid'>> {
 	if (actor.suspended) return fail('suspended');
+	if (idempotencyKey !== undefined && !isUuid(idempotencyKey))
+		return fail('idempotency_key_invalid');
 	const v = validateRecipeInput(input);
 	if (!v.ok) return v;
 	return db.transaction(async (tx) => {
+		const published = async () => {
+			if (idempotencyKey === undefined) return null;
+			const [row] = await tx
+				.select({ id: recipe.id })
+				.from(recipe)
+				.where(and(eq(recipe.memberId, actor.memberId), eq(recipe.idempotencyKey, idempotencyKey)));
+			return row ? ok({ id: row.id }) : null;
+		};
+		const before = await published();
+		if (before) return before;
 		const keys = [v.value.mainPhotoKey, ...v.value.extraPhotoKeys];
 		if (!(await lockPhotos(tx, 'recipe', keys)).ownedBy(actor.memberId, keys))
 			return fail('photo_key_invalid');
@@ -208,8 +234,19 @@ export async function createRecipe(
 			if (!o.ok) return o;
 			override = o.value;
 		}
-		const id = await writeRecipe(tx, null, actor.memberId, v.value, ings.value, derived, override);
-		return ok({ id });
+		const id = await writeRecipe(
+			tx,
+			null,
+			actor.memberId,
+			v.value,
+			ings.value,
+			derived,
+			override,
+			idempotencyKey ?? null
+		);
+		if (id !== null) return ok({ id });
+		// A request with the same key committed first (our INSERT waited for it): answer with its Recipe.
+		return (await published())!;
 	});
 }
 

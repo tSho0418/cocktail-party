@@ -154,6 +154,9 @@ export const recipe = pgTable(
 		hasAlcohol: boolean('has_alcohol').notNull().default(false),
 		// Denormalised title + description + Ingredient names + step text for keyword search (FR-043).
 		searchText: text('search_text').notNull().default(''),
+		// Client-generated key of the POST that published it; a resent POST finds its Recipe by it.
+		// NULL for Recipes published without one (older clients, the seed).
+		idempotencyKey: uuid('idempotency_key'),
 		createdAt: createdAt(),
 		updatedAt: updatedAt()
 	},
@@ -173,6 +176,10 @@ export const recipe = pgTable(
 			sql`${t.abvOverride} IS NULL OR (${t.hasAlcohol} AND ${t.abvOverride} > 0 AND ${t.abvOverride} <= 100)`
 		),
 		index('recipe_member_id_idx').on(t.memberId),
+		// Keys are scoped to the Member, so one Member's key says nothing about another's.
+		uniqueIndex('recipe_member_idempotency_key_unique')
+			.on(t.memberId, t.idempotencyKey)
+			.where(sql`${t.idempotencyKey} IS NOT NULL`),
 		index('recipe_created_at_idx').on(t.createdAt),
 		index('recipe_search_text_trgm_idx').using('gin', t.searchText.op('gin_trgm_ops'))
 	]
