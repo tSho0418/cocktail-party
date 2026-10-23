@@ -201,12 +201,16 @@ describe('updateRecipe', () => {
 			const id = await make(
 				tx,
 				alice,
-				input('ジントニック', [
-					[i.gin, 1],
-					[i.tonic, 3]
-				])
+				input(
+					'ジントニック',
+					[
+						[i.gin, 1],
+						[i.tonic, 3]
+					],
+					{ abvOverride: 9 }
+				)
 			);
-			const next = input('改', [[i.gin, 1]]);
+			const next = input('改', [[i.gin, 1]], { abvOverride: 30 });
 			expect(await updateRecipe(tx, bob, id, next)).toEqual({ ok: false, error: 'forbidden' });
 			expect(await updateRecipe(tx, admin, id, next)).toEqual({ ok: false, error: 'forbidden' });
 			expect(await updateRecipe(tx, { ...alice, suspended: true }, id, next)).toEqual({
@@ -217,7 +221,106 @@ describe('updateRecipe', () => {
 				ok: false,
 				error: 'not_found'
 			});
-			expect((await stored(tx, id)).title).toBe('ジントニック');
+			expect(await stored(tx, id)).toMatchObject({ title: 'ジントニック', abvOverride: 9 });
+		}));
+
+	it('accepts an override up to the highest Ingredient ABV and clears it on an explicit null (FR-021/022/023)', () =>
+		isolated(async (tx) => {
+			const alice = await seedMember(tx, 'alice');
+			const i = await seedIngredients(tx);
+			const martini = input('マティーニ', [
+				[i.gin, 4.5],
+				[i.vermouth, 1.5]
+			]);
+			const id = await make(tx, alice, martini);
+			const update = async (abvOverride: number | null) =>
+				updateRecipe(tx, alice, id, await own(tx, alice, { ...martini, abvOverride }));
+
+			expect((await update(40)).ok).toBe(true);
+			expect(await stored(tx, id)).toMatchObject({ abvOverride: 40, autoAbv: 34.5 });
+			expect((await update(null)).ok).toBe(true);
+			expect(await stored(tx, id)).toMatchObject({ abvOverride: null, autoAbv: 34.5 });
+		}));
+
+	it('rejects an override that is not in (0, highest ABV] or has two decimals, and writes nothing (FR-021/022)', () =>
+		isolated(async (tx) => {
+			const alice = await seedMember(tx, 'alice');
+			const i = await seedIngredients(tx);
+			const martini = input('マティーニ', [
+				[i.gin, 4.5],
+				[i.vermouth, 1.5]
+			]);
+			const id = await make(tx, alice, { ...martini, abvOverride: 20 });
+			for (const abvOverride of [0, 40.1, 30.25]) {
+				expect(
+					await updateRecipe(
+						tx,
+						alice,
+						id,
+						await own(tx, alice, { ...martini, title: '改', abvOverride })
+					)
+				).toEqual({ ok: false, error: 'override_invalid' });
+			}
+			expect(await stored(tx, id)).toMatchObject({ title: 'マティーニ', abvOverride: 20 });
+		}));
+
+	it('refuses an explicit override on a Recipe without alcohol and writes nothing (FR-024)', () =>
+		isolated(async (tx) => {
+			const alice = await seedMember(tx, 'alice');
+			const i = await seedIngredients(tx);
+			const id = await make(
+				tx,
+				alice,
+				input('ジントニック', [
+					[i.gin, 1],
+					[i.tonic, 3]
+				])
+			);
+			const next = input('ライムソーダ', [
+				[i.lime, 1],
+				[i.soda, 4]
+			]);
+			expect(
+				await updateRecipe(tx, alice, id, await own(tx, alice, { ...next, abvOverride: 1 }))
+			).toEqual({ ok: false, error: 'override_not_allowed' });
+			expect(await stored(tx, id)).toMatchObject({ title: 'ジントニック', hasAlcohol: true });
+		}));
+
+	it('discards a stored override when the Recipe loses its alcohol (FR-015/024)', () =>
+		isolated(async (tx) => {
+			const alice = await seedMember(tx, 'alice');
+			const i = await seedIngredients(tx);
+			const id = await make(
+				tx,
+				alice,
+				input(
+					'ジントニック',
+					[
+						[i.gin, 1],
+						[i.tonic, 3]
+					],
+					{ abvOverride: 9 }
+				)
+			);
+			const r = await updateRecipe(
+				tx,
+				alice,
+				id,
+				await own(
+					tx,
+					alice,
+					input('ライムソーダ', [
+						[i.lime, 1],
+						[i.soda, 4]
+					])
+				)
+			);
+			expect(r.ok && r.value.overrideDiscarded).toBe(true);
+			expect(await stored(tx, id)).toMatchObject({
+				hasAlcohol: false,
+				autoAbv: 0,
+				abvOverride: null
+			});
 		}));
 
 	it('recomputes derived columns, replaces children and returns dropped photo keys', () =>

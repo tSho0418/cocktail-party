@@ -27,8 +27,9 @@ if (process.env.VITEST_DB) {
 
 // Tests must not depend on a developer's .env (CI has none): blank every R2_* and OAuth variable the
 // tests read through `$app/env/private`. SvelteKit snapshots env when this config loads and process.env
-// wins over .env, so this has to happen here. Applies to both projects; the db block above then
-// overrides OAuth with dummies. `VITEST` is set by vitest before it loads the config.
+// wins over .env, so this has to happen here. R2_* are blanked for both projects; OAuth only without
+// VITEST_DB (the db block above has already set dummies, which must stay). `VITEST` is set by vitest
+// before it loads the config.
 if (process.env.VITEST) {
 	for (const name of [
 		'R2_ACCOUNT_ID',

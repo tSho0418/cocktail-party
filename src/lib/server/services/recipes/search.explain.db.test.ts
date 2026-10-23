@@ -1,5 +1,6 @@
 // Query-plan check on ~2,000 generated Recipes; prints EXPLAIN ANALYZE, asserts no timings.
-// Run alone (it commits data, then truncates); EXPLAIN_SEARCH is the report path:
+// It commits data and truncates member/ingredient afterwards, which is safe because every
+// `pnpm test:db` run has its own database. EXPLAIN_SEARCH is the report path (not `1`):
 // EXPLAIN_SEARCH=/tmp/explain.txt pnpm test:db search.explain
 import { writeFileSync } from 'node:fs';
 import { sql } from 'drizzle-orm';
