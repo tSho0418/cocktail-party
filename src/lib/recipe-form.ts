@@ -234,7 +234,17 @@ export const API_ERRORS: Record<string, string> = {
 	override_invalid: '修正値が範囲外です。0% を超え、材料の最高度数以下にしてください。',
 	unsupported_media_type: 'この形式の写真は送れません。',
 	too_large: '写真が大きすぎます。別の写真を選んでください。',
-	invalid_image: 'この写真は使えません。別の写真を選んでください。'
+	invalid_image: 'この写真は使えません。別の写真を選んでください。',
+	// POST /api/photos 422: the codes of `ProcessError` (services/images/process.ts).
+	unsupported_format: 'JPEG、PNG、WebP の写真を選んでください。',
+	format_mismatch: 'この写真は読み込めませんでした。別の写真を選んでください。',
+	undecodable: 'この写真は読み込めませんでした。別の写真を選んでください。',
+	too_many_pixels: '写真の解像度が高すぎます。画像を縮小するか、別の写真を選んでください。',
+	// 429: the Member's daily limits (services/quota). They lift by themselves within 24 hours.
+	photo_daily_limit:
+		'1日にアップロードできる写真の数の上限に達しました。しばらく(最長24時間)待ってからお試しください。',
+	recipe_daily_limit:
+		'1日に投稿できるレシピの数の上限に達しました。しばらく(最長24時間)待ってからお試しください。'
 };
 
 export const apiErrorMessage = (

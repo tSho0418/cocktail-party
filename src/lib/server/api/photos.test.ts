@@ -11,11 +11,15 @@ function setup(authorize: MiddlewareHandler = allow) {
 	const store = memoryImageStore();
 	const recorded: { memberId: string; kind: string; id: string }[] = [];
 	let failRecord = false;
+	let over = false;
 	const record = async (memberId: string, kind: string, id: string) => {
 		if (failRecord) throw new Error('db down');
 		recorded.push({ memberId, kind, id });
 	};
-	const api = new Hono().route('/photos', photosRoute({ authorize, store: () => store, record }));
+	const api = new Hono().route(
+		'/photos',
+		photosRoute({ authorize, store: () => store, record, overQuota: async () => over })
+	);
 	const member = { id: 'member-1', username: 'm', isAdministrator: false };
 	const post = (body: BodyInit, headers: Record<string, string> = {}, query = '') =>
 		api.request(
@@ -34,6 +38,9 @@ function setup(authorize: MiddlewareHandler = allow) {
 		recorded,
 		failRecording: () => {
 			failRecord = true;
+		},
+		exceedQuota: () => {
+			over = true;
 		}
 	};
 }
@@ -66,6 +73,28 @@ describe('POST /api/photos', () => {
 		failRecording();
 		await expect(post(new Uint8Array(await jpegWithGps()))).resolves.toMatchObject({ status: 500 });
 		expect(store.objects.size).toBe(0);
+	});
+
+	it('answers 429 over the daily limit, before reading the body, storing or recording anything', async () => {
+		const { store, post, recorded, exceedQuota } = setup();
+		exceedQuota();
+		let pulls = 0;
+		const body = new ReadableStream<Uint8Array>(
+			{
+				pull(controller) {
+					if (++pulls > 3) controller.close();
+					else controller.enqueue(new Uint8Array(1024));
+				}
+			},
+			{ highWaterMark: 0 }
+		);
+		const res = await post(body);
+		expect(res.status).toBe(429);
+		expect(await res.json()).toEqual({ error: 'photo_daily_limit' });
+		await new Promise((r) => setTimeout(r, 10));
+		expect(pulls).toBe(0);
+		expect(store.objects.size).toBe(0);
+		expect(recorded).toEqual([]);
 	});
 
 	it('runs authorize before reading the body', async () => {

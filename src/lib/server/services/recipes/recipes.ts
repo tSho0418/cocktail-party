@@ -12,6 +12,7 @@ import {
 	recipeStep,
 	report
 } from '#lib/server/db/schema.js';
+import { isOverQuota, recordQuotaUse } from '#lib/server/services/quota/index.js';
 import { lockPhotos, photoId, releaseUnreferenced } from './photos';
 import {
 	recomputeDerived,
@@ -204,13 +205,25 @@ async function writeRecipe(
  * with the Recipe the first one published instead of publishing another. Keys are per Member.
  * The lookup comes first, before the photo check: the first request has already attached the
  * photos (an edit may even have released them since), and a resend must not fail on that.
+ *
+ * Every Recipe published is counted in `quota_use`. With `dailyLimit` (POST /api/recipes passes
+ * DAILY_LIMITS.recipe), a Member who has already published that many in the last 24 hours gets
+ * 'recipe_daily_limit' and nothing is written. The count comes after the idempotent lookup (a
+ * resend is not a new Recipe) and is a plain SELECT, so the Lock order is unchanged. Seeding
+ * and tests publish without a limit.
  */
 export async function createRecipe(
 	db: Db,
 	actor: Actor,
 	input: RecipeInput,
-	idempotencyKey?: string
-): Promise<Result<{ id: string }, RecipeInputError | 'suspended' | 'idempotency_key_invalid'>> {
+	idempotencyKey?: string,
+	{ dailyLimit }: { dailyLimit?: number } = {}
+): Promise<
+	Result<
+		{ id: string },
+		RecipeInputError | 'suspended' | 'idempotency_key_invalid' | 'recipe_daily_limit'
+	>
+> {
 	if (actor.suspended) return fail('suspended');
 	if (idempotencyKey !== undefined && !isUuid(idempotencyKey))
 		return fail('idempotency_key_invalid');
@@ -227,6 +240,8 @@ export async function createRecipe(
 		};
 		const before = await published();
 		if (before) return before;
+		if (dailyLimit !== undefined && (await isOverQuota(tx, actor.memberId, 'recipe', dailyLimit)))
+			return fail('recipe_daily_limit');
 		const keys = [v.value.mainPhotoKey, ...v.value.extraPhotoKeys];
 		if (!(await lockPhotos(tx, 'recipe', keys)).ownedBy(actor.memberId, keys))
 			return fail('photo_key_invalid');
@@ -249,7 +264,10 @@ export async function createRecipe(
 			override,
 			idempotencyKey ?? null
 		);
-		if (id !== null) return ok({ id });
+		if (id !== null) {
+			await recordQuotaUse(tx, actor.memberId, 'recipe');
+			return ok({ id });
+		}
 		// A request with the same key committed first (our INSERT waited for its transaction, which
 		// holds every lock it needed already, so this wait cannot form a cycle): answer with its Recipe.
 		const existing = await published();

@@ -2,6 +2,7 @@ import { Hono, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import * as privateEnv from '$app/env/private';
 import { db } from '#lib/server/db/index.js';
+import { isOverQuota } from '#lib/server/services/quota/index.js';
 import { recordPhotoUpload } from '#lib/server/services/recipes/index.js';
 import type { ApiEnv } from './http';
 import {
@@ -26,21 +27,38 @@ const OWNER_KINDS: OwnerKind[] = ['recipe', 'member'];
 type RecordUpload = (memberId: string, kind: OwnerKind, id: string) => Promise<void>;
 const recordInDb: RecordUpload = (memberId, kind, id) => recordPhotoUpload(db, memberId, kind, id);
 
+type OverQuota = (memberId: string) => Promise<boolean>;
+const overQuotaInDb: OverQuota = (memberId) => isOverQuota(db, memberId, 'photo');
+
 /**
  * POST /photos?kind=recipe|member with the raw image as application/octet-stream
  * (multipart overhead would push a 4.5MB photo over the platform body limit).
  * The Content-Type must be exactly `application/octet-stream` (no parameters); our own client sets it.
  * `authorize` must let only a signed-in Member through: the upload is recorded against that
  * Member (`record`), and a Recipe can only use photos its own Member uploaded.
+ * A Member over the daily limit (`overQuota`, services/quota) gets 429 `photo_daily_limit` before
+ * the body is read, so a refused upload costs no decoding and no R2 write.
  */
 export const photosRoute = ({
 	authorize = denyAll,
 	store = defaultStore,
-	record = recordInDb
-}: { authorize?: MiddlewareHandler; store?: () => ImageStore; record?: RecordUpload } = {}) =>
+	record = recordInDb,
+	overQuota = overQuotaInDb
+}: {
+	authorize?: MiddlewareHandler;
+	store?: () => ImageStore;
+	record?: RecordUpload;
+	overQuota?: OverQuota;
+} = {}) =>
 	new Hono<ApiEnv>().post(
 		'/',
 		authorize,
+		// Before bodyLimit, which would read a length-less body to count it.
+		async (c, next) => {
+			if (await overQuota(c.env.locals.member!.id))
+				return c.json({ error: 'photo_daily_limit' }, 429);
+			await next();
+		},
 		// Rejects on Content-Length before reading, and counts streamed bytes when it is absent.
 		bodyLimit({ maxSize: MAX_BYTES, onError: (c) => c.json({ error: 'too_large' }, 413) }),
 		async (c) => {

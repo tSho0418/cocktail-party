@@ -1,6 +1,7 @@
 import { asc, inArray, sql } from 'drizzle-orm';
 import { member, photoUpload, recipe, recipePhoto } from '#lib/server/db/schema.js';
 import type { OwnerKind } from '#lib/server/services/images/index.js';
+import { pruneQuotaUse, recordQuotaUse } from '#lib/server/services/quota/index.js';
 import type { Db } from './recipes';
 
 // Photo keys are `<kind>/<uuid>/{list,detail}.webp` (storePhoto); the uuid identifies an upload.
@@ -18,9 +19,16 @@ const filesOf = (kind: OwnerKind, id: string) => [
 	`${kind}/${id}/detail.webp`
 ];
 
-/** Records who uploaded a photo; POST /api/photos calls it once the derivatives are stored. */
+/**
+ * Records who uploaded a photo and counts it against the Member's daily limit (services/quota);
+ * POST /api/photos calls it once the derivatives are stored.
+ */
 export async function recordPhotoUpload(db: Db, memberId: string, kind: OwnerKind, id: string) {
-	await db.insert(photoUpload).values({ id, memberId, kind });
+	await db.transaction(async (tx) => {
+		await tx.insert(photoUpload).values({ id, memberId, kind });
+		await recordQuotaUse(tx, memberId, 'photo');
+	});
+	await pruneQuotaUse(db, memberId);
 }
 
 /**

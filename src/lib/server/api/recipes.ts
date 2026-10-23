@@ -11,6 +11,7 @@ import {
 	type RecipeInput,
 	type SearchParams
 } from '#lib/server/services/recipes/index.js';
+import { DAILY_LIMITS } from '#lib/server/services/quota/index.js';
 import { deleteObjects } from '#lib/server/services/images/delete-objects.js';
 import type { ImageStore } from '#lib/server/services/images/index.js';
 import {
@@ -108,7 +109,9 @@ export const recipesRoute = ({ store }: { store: () => ImageStore }) =>
 			validator('json', (b, c) => parseCreateBody(b) ?? invalidRequest(c)),
 			async (c) => {
 				const { idempotencyKey, ...input } = c.req.valid('json');
-				const result = await createRecipe(db, actorOf(c), input, idempotencyKey);
+				const result = await createRecipe(db, actorOf(c), input, idempotencyKey, {
+					dailyLimit: DAILY_LIMITS.recipe
+				});
 				if (!result.ok) return c.json({ error: result.error }, statusOf(result.error));
 				return c.json(result.value, 201);
 			}
