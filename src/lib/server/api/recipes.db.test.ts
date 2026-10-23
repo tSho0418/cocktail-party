@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { and, count, eq } from 'drizzle-orm';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { and, count, eq, inArray } from 'drizzle-orm';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { db } from '#lib/server/db/index.js';
-import { like, photoUpload, recipe } from '#lib/server/db/schema.js';
+import { like, photoUpload, quotaUse, recipe } from '#lib/server/db/schema.js';
 import { MAX_JSON_BYTES } from './http';
 import { createApp } from './app';
 import { call, seedMember, store, uploadPhoto, type TestMember } from './test-helpers';
@@ -33,6 +33,12 @@ async function createRecipe(as: TestMember, title: string, extra: object = {}) {
 	expect(res.status).toBe(201);
 	return (await res.json()).id as string;
 }
+
+// These tests share a few Members and publish far more than the daily limit allows one Member;
+// the limit itself is tested in quota.db.test.ts.
+afterEach(async () => {
+	await db.delete(quotaUse).where(inArray(quotaUse.memberId, [alice.id, bob.id, admin.id]));
+});
 
 beforeAll(async () => {
 	[alice, bob, noName] = [

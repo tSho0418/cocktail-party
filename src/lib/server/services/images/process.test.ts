@@ -1,6 +1,13 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
-import { MAX_BYTES, SIZES, processUpload, type Derivative, type ProcessResult } from './process';
+import {
+	MAX_BYTES,
+	MAX_PIXELS,
+	SIZES,
+	processUpload,
+	type Derivative,
+	type ProcessResult
+} from './process';
 import { CAMERA_MAKE, LATITUDE_BYTES, isRedAt, jpegWithGps, rawLandscape } from './test-fixtures';
 
 function accepted(r: ProcessResult) {
@@ -113,5 +120,22 @@ describe('processUpload', () => {
 			.toBuffer();
 		expect(bomb.length).toBeLessThan(MAX_BYTES);
 		expect(await processUpload(bomb)).toEqual({ ok: false, error: 'too_many_pixels' });
+	});
+
+	// Phone photos are shrunk to under 4.5MB in the browser (max edge 4096, so <= 16.8MP) before they
+	// are sent; only a file already under 4.5MB goes as it is. The limit sits above both.
+	it('accepts up to MAX_PIXELS and rejects one row more', async () => {
+		const solid = (width: number, height: number) =>
+			sharp({ create: { width, height, channels: 3, background: 'red' } })
+				.png()
+				.toBuffer();
+		const width = 6000;
+		const rows = Math.floor(MAX_PIXELS / width);
+		const atLimit = accepted(await processUpload(await solid(width, rows)));
+		expect([atLimit.detail.width, atLimit.list.width]).toEqual([1600, 480]);
+		expect(await processUpload(await solid(width, rows + 1))).toEqual({
+			ok: false,
+			error: 'too_many_pixels'
+		});
 	});
 });

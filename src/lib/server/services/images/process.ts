@@ -2,7 +2,7 @@
 import sharp from 'sharp';
 
 export const MAX_BYTES = 4_500_000; // Vercel function body limit (4.5MB), taken as decimal to be conservative
-const MAX_PIXELS = 50_000_000; // decompression-bomb guard: a 4.5MB PNG can declare a huge canvas
+export const MAX_PIXELS = 30_000_000; // decompression-bomb guard: a 4.5MB PNG can declare a huge canvas
 export const SIZES = { list: 480, detail: 1600 } as const;
 
 type Format = 'jpeg' | 'png' | 'webp';
@@ -56,7 +56,10 @@ export async function processUpload(bytes: Uint8Array): Promise<ProcessResult> {
 				.toBuffer({ resolveWithObject: true });
 			return { data, width: info.width, height: info.height };
 		};
-		const [list, detail] = await Promise.all([derive(SIZES.list), derive(SIZES.detail)]);
+		// One after the other: each clone() decodes the input again, and two decodes at once double
+		// the peak memory (a decoded 30MP image is ~90-120MB) on a small serverless instance.
+		const list = await derive(SIZES.list);
+		const detail = await derive(SIZES.detail);
 		return { ok: true, list, detail };
 	} catch {
 		return { ok: false, error: 'undecodable' };

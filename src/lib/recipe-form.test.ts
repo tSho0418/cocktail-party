@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import type { ProcessError } from '#lib/server/services/images/process.js';
 import {
+	apiErrorMessage,
 	hasErrors,
 	parseMixRatio,
 	previewAlcohol,
@@ -198,5 +200,21 @@ describe('toPayload', () => {
 		expect(
 			toPayload(valid({ ingredients: [row(1, tonic, '1')], abvOverride: '12.5' })).abvOverride
 		).toBeNull();
+	});
+});
+
+describe('apiErrorMessage for the upload and limit errors', () => {
+	it('tells the Member why, never the generic fallback', () => {
+		// Record<ProcessError, ...>: a new image error is a compile error here until it is listed.
+		const processErrors: Record<ProcessError, true> = {
+			too_large: true,
+			unsupported_format: true,
+			format_mismatch: true,
+			too_many_pixels: true,
+			undecodable: true
+		};
+		const fallback = apiErrorMessage(undefined);
+		for (const code of [...Object.keys(processErrors), 'photo_daily_limit', 'recipe_daily_limit'])
+			expect(apiErrorMessage(code), code).not.toBe(fallback);
 	});
 });

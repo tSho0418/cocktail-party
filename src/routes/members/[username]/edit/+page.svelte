@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import PhotoPicker from '#lib/components/PhotoPicker.svelte';
+	import { apiErrorMessage } from '#lib/recipe-form.js';
 	import type { PageProps } from './$types';
 
 	let { data, form }: PageProps = $props();
@@ -20,8 +21,13 @@
 				headers: { 'content-type': 'application/octet-stream' },
 				body: blob
 			});
-			if (!res.ok) throw new Error(String(res.status));
-			iconKey = (await res.json()).keys.list;
+			const body = await res.json().catch(() => null);
+			if (!res.ok || !body?.keys?.list) {
+				iconKey = '';
+				uploadError = apiErrorMessage(body?.error, 'アイコンをアップロードできませんでした。');
+				return;
+			}
+			iconKey = body.keys.list;
 			previewUrl = URL.createObjectURL(blob);
 			removeIcon = false;
 		} catch {

@@ -232,6 +232,25 @@ export const photoUpload = pgTable(
 	]
 );
 
+// One row per photo upload or Recipe publish, kept ~24 hours: the Member's daily limits count these
+// (services/quota). Not `photo_upload` or `recipe`: a Member could delete what they made and
+// refund the count, so the limit would never bind. Rows go with the Member.
+export const quotaUse = pgTable(
+	'quota_use',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		memberId: uuid('member_id')
+			.notNull()
+			.references(() => member.id, { onDelete: 'cascade' }),
+		kind: text('kind').notNull(),
+		createdAt: createdAt()
+	},
+	(t) => [
+		check('quota_use_kind', sql`${t.kind} IN ('photo', 'recipe')`),
+		index('quota_use_member_kind_created_idx').on(t.memberId, t.kind, t.createdAt)
+	]
+);
+
 export const recipeIngredient = pgTable(
 	'recipe_ingredient',
 	{
