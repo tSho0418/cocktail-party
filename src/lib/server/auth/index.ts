@@ -1,7 +1,7 @@
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { sveltekitCookies } from 'better-auth/svelte-kit';
-import { eq } from 'drizzle-orm';
+import { eq, lt } from 'drizzle-orm';
 import { getRequestEvent } from '$app/server';
 import {
 	BETTER_AUTH_SECRET,
@@ -24,6 +24,24 @@ export type Provider = (typeof PROVIDERS)[number];
  */
 export const LOGIN_RATE_LIMIT = { window: 60, max: 10 };
 
+/**
+ * Vercel sets this header itself to the client's address, even when a proxy sits in front of
+ * the project (x-forwarded-for can then carry what the client sent). Without it (local, tests)
+ * Better Auth falls back to one shared bucket, never to a header the client can choose.
+ */
+export const CLIENT_IP_HEADER = 'x-vercel-forwarded-for';
+
+/** `rate_limit` rows hold client addresses; older than this they are deleted (privacy page). */
+const RATE_LIMIT_KEEP_MS = 60 * 60 * 1000;
+
+/**
+ * Deletes `rate_limit` rows nobody has touched for an hour. Better Auth only prunes rows when
+ * some address's window rolls over, so the rows of addresses that never return would stay.
+ * Called from the login action on a fraction of the requests: no cron, no extra cost.
+ */
+export const pruneRateLimit = async (now = Date.now()) =>
+	void (await db.delete(rateLimit).where(lt(rateLimit.lastRequest, now - RATE_LIMIT_KEEP_MS)));
+
 const isSuspended = async (memberId: string) =>
 	(await db.select({ at: member.suspendedAt }).from(member).where(eq(member.id, memberId)))[0]
 		?.at != null;
@@ -36,7 +54,10 @@ const createAuth = () =>
 			provider: 'pg',
 			schema: { member, account, session, verification, rateLimit }
 		}),
-		advanced: { database: { generateId: 'uuid' } },
+		advanced: {
+			database: { generateId: 'uuid' },
+			ipAddress: { ipAddressHeaders: [CLIENT_IP_HEADER] }
+		},
 		// `member` is Better Auth's user table; README.md "Auth" has the mapping.
 		user: {
 			modelName: 'member',
@@ -57,8 +78,8 @@ const createAuth = () =>
 		},
 		// In-memory counters are per serverless instance and so do not limit anything; the database
 		// is shared. Off by default outside production; on everywhere so the db tests exercise it.
-		// The client address is the single-value x-forwarded-for, which Vercel sets itself (a
-		// chain of several values is not trusted and falls into one shared bucket).
+		// Keyed by CLIENT_IP_HEADER; a value of several addresses is not trusted and falls into
+		// the shared bucket.
 		rateLimit: {
 			enabled: true,
 			storage: 'database',

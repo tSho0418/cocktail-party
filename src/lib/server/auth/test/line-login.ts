@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { vi } from 'vitest';
 import { db } from '#lib/server/db/index.js';
 import { account, member } from '#lib/server/db/schema.js';
-import { auth } from '../index';
+import { auth, CLIENT_IP_HEADER } from '../index';
 
 export const ORIGIN = 'http://localhost:5173';
 
@@ -64,7 +64,7 @@ export async function socialLogin(provider: Provider, claims: Record<string, unk
 			headers: {
 				'content-type': 'application/json',
 				origin: ORIGIN,
-				'x-forwarded-for': randomIp()
+				[CLIENT_IP_HEADER]: randomIp()
 			},
 			body: JSON.stringify({
 				provider,
