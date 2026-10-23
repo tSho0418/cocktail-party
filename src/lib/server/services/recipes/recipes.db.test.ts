@@ -10,15 +10,7 @@ import {
 	report,
 	save
 } from '#lib/server/db/schema.js';
-import {
-	clearAbvOverride,
-	createRecipe,
-	deleteRecipe,
-	getRecipeDetail,
-	setAbvOverride,
-	updateRecipe,
-	type Db
-} from './recipes';
+import { createRecipe, deleteRecipe, getRecipeDetail, updateRecipe, type Db } from './recipes';
 import {
 	input,
 	isolated,
@@ -319,7 +311,7 @@ describe('updateRecipe', () => {
 			expect(await stored(tx, id)).toMatchObject({ autoAbv: 10, abvOverride: null });
 
 			// Override above the new max ABV (25) is discarded silently with a flag.
-			await setAbvOverride(tx, alice, id, 30);
+			await updateRecipe(tx, alice, id, await fresh({ ...gt, abvOverride: 30 }));
 			r = await updateRecipe(
 				tx,
 				alice,
@@ -376,54 +368,6 @@ describe('updateRecipe', () => {
 			expect(ings).toHaveLength(2);
 			const steps = await tx.select().from(recipeStep).where(eq(recipeStep.recipeId, id));
 			expect(steps).toHaveLength(2);
-		}));
-});
-
-describe('setAbvOverride / clearAbvOverride', () => {
-	it('allows 0 < override <= highest Ingredient ABV on a Recipe with alcohol (FR-021/022)', () =>
-		isolated(async (tx) => {
-			const alice = await seedMember(tx, 'alice');
-			const bob = await seedMember(tx, 'bob');
-			const i = await seedIngredients(tx);
-			const id = await make(
-				tx,
-				alice,
-				input('マティーニ', [
-					[i.gin, 4.5],
-					[i.vermouth, 1.5]
-				])
-			);
-			const err = (error: string) => ({ ok: false, error });
-			expect(await setAbvOverride(tx, alice, id, 0)).toEqual(err('override_invalid'));
-			expect(await setAbvOverride(tx, alice, id, 40.1)).toEqual(err('override_invalid'));
-			expect(await setAbvOverride(tx, alice, id, 30.25)).toEqual(err('override_invalid'));
-			expect(await setAbvOverride(tx, bob, id, 30)).toEqual(err('forbidden'));
-			expect(await setAbvOverride(tx, alice, id, 40)).toEqual({
-				ok: true,
-				value: { abvOverride: 40 }
-			});
-			expect(await clearAbvOverride(tx, bob, id)).toEqual(err('forbidden'));
-			expect((await stored(tx, id)).abvOverride).toBe(40);
-			expect(await clearAbvOverride(tx, alice, id)).toEqual({ ok: true, value: null });
-			expect(await stored(tx, id)).toMatchObject({ abvOverride: null, autoAbv: 34.5 });
-		}));
-
-	it('refuses an override on a Recipe without alcohol (FR-024)', () =>
-		isolated(async (tx) => {
-			const alice = await seedMember(tx, 'alice');
-			const i = await seedIngredients(tx);
-			const id = await make(
-				tx,
-				alice,
-				input('ライムソーダ', [
-					[i.lime, 1],
-					[i.soda, 4]
-				])
-			);
-			expect(await setAbvOverride(tx, alice, id, 1)).toEqual({
-				ok: false,
-				error: 'override_not_allowed'
-			});
 		}));
 });
 

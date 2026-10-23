@@ -9,9 +9,10 @@ import { afterAll, describe, expect, it } from 'vitest';
 import * as schema from '#lib/server/db/schema.js';
 import { recomputeDerived } from '#lib/domain/alcohol/index.js';
 import { searchRecipes, type SearchParams } from './search';
+import { seedMember } from './test-fixtures';
 
 describe.skipIf(!process.env.EXPLAIN_SEARCH)('searchRecipes EXPLAIN on 2,000 Recipes', () => {
-	const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL_TEST });
+	const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 	let last: { query: string; params: unknown[] }[] = [];
 	const db = drizzle({
 		client: pool,
@@ -49,16 +50,9 @@ describe.skipIf(!process.env.EXPLAIN_SEARCH)('searchRecipes EXPLAIN on 2,000 Rec
 			'ミントを叩く'
 		];
 
-		const members = await db
-			.insert(schema.member)
-			.values(
-				Array.from({ length: 200 }, (_, n) => ({
-					provider: 'google',
-					providerAccountId: `x${n}`,
-					username: `user_${n}`
-				}))
-			)
-			.returning({ id: schema.member.id });
+		const members: { id: string }[] = [];
+		for (let n = 0; n < 200; n++)
+			members.push({ id: (await seedMember(db, `user_${n}`)).memberId });
 		const ings = await db
 			.insert(schema.ingredient)
 			.values(

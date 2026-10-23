@@ -296,48 +296,6 @@ export async function updateRecipe(
 	});
 }
 
-/** FR-021/022/024: the owner overrides the Alcohol Content of a Recipe with alcohol. */
-export async function setAbvOverride(
-	db: Db,
-	actor: Actor,
-	recipeId: string,
-	override: number
-): Promise<
-	Result<{ abvOverride: number }, AccessError | 'override_not_allowed' | 'override_invalid'>
-> {
-	return db.transaction(async (tx) => {
-		const cur = await lockRecipe(tx, actor, recipeId);
-		if (!cur.ok) return cur;
-		const [{ max }] = await tx
-			.select({ max: sql<number>`coalesce(max(${ingredient.abvPercent}), 0)`.mapWith(Number) })
-			.from(recipeIngredient)
-			.innerJoin(ingredient, eq(ingredient.id, recipeIngredient.ingredientId))
-			.where(eq(recipeIngredient.recipeId, recipeId));
-		const v = validateAbvOverride({
-			override,
-			hasAlcohol: cur.value.hasAlcohol,
-			maxIngredientAbv: max
-		});
-		if (!v.ok) return fail(v.error === 'no_alcohol' ? 'override_not_allowed' : 'override_invalid');
-		await tx.update(recipe).set({ abvOverride: v.value }).where(eq(recipe.id, recipeId));
-		return ok({ abvOverride: v.value });
-	});
-}
-
-/** FR-023 "recompute": drop the override so the stored auto value shows again. */
-export async function clearAbvOverride(
-	db: Db,
-	actor: Actor,
-	recipeId: string
-): Promise<Result<null, AccessError>> {
-	return db.transaction(async (tx) => {
-		const cur = await lockRecipe(tx, actor, recipeId);
-		if (!cur.ok) return cur;
-		await tx.update(recipe).set({ abvOverride: null }).where(eq(recipe.id, recipeId));
-		return ok(null);
-	});
-}
-
 /**
  * FR-008/074: owner or Administrator. Likes, Saves, steps and photos cascade; Reports stay with
  * target_state 'recipe_deleted'. Releases the now-unreferenced photo uploads and returns their keys
