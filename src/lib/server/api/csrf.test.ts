@@ -1,5 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { app } from './app';
+
+// POST /api/photos takes a daily upload (services/quota) before it looks at the Content-Type; this
+// unit test has no database, so the reservation is stubbed to succeed.
+vi.mock('#lib/server/services/quota/index.js', async (importOriginal) => ({
+	...(await importOriginal<typeof import('#lib/server/services/quota/index.js')>()),
+	reserveQuota: async () => 'use',
+	pruneQuotaUse: async () => {}
+}));
 
 // What the browser can send without a CORS preflight: form encodings, text/plain, or no Content-Type.
 // A Member is signed in, so a 403 can only come from the Origin check (#66).
