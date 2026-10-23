@@ -57,7 +57,7 @@ The app database is shared, though: worktrees using the same `DATABASE_URL` see 
 
 The first migration enables `pg_trgm` by a line added by hand to `drizzle/0000_init.sql`; drizzle-kit does not emit `CREATE EXTENSION`.
 
-The DB client (`#lib/server/db`) uses node-postgres. Locally it talks to the compose Postgres; in production set `DATABASE_URL` to Neon's pooled connection string (`-pooler` host, `sslmode=require`).
+The DB client (`#lib/server/db`) uses node-postgres. Locally it talks to the compose Postgres; on a Preview or in production set `DATABASE_URL` to Neon's pooled connection string (`-pooler` host, `sslmode=verify-full`), see "Preview" below. The pool is small on purpose (`max: 5`, idle connections closed after 5 s, 10 s to connect, and an `error` listener so a connection cut by the server does not crash the process); the reasons are in the comment in `src/lib/server/db/index.ts`. `@vercel/functions`' `attachDatabasePool` is not used: it is experimental, its effect cannot be checked outside Vercel, and on the pooled URL a connection left open by a suspended instance only occupies a PgBouncer client slot (limit 10,000), not one of Postgres's roughly 97. Revisit it if the app runs on the direct URL.
 
 ## API
 
@@ -166,7 +166,7 @@ Each Recipe's Main Photo is a generated gradient card, not a photo of the drink;
 None of these can be exercised without real credentials. Deploy a Preview with the production-like variables, then:
 
 1. **R2 and `sharp` on Vercel** (also the Known limits above): sign in, create a Recipe with a JPEG that has GPS EXIF (any phone photo), and confirm `POST /api/photos` returns 201, the image shows on the Recipe page, and the stored `*.webp` has no EXIF (`exiftool` on the downloaded file). Then delete the Recipe and check both objects are gone from the bucket.
-2. **Google and LINE login**: sign in with each on the Preview URL (the callback URLs must be registered, see `.env.example`), set a Username, sign out and in again, and confirm one provider cannot reach the other's Member. For LINE, try an account that returns no email.
+2. **Google and LINE login**: sign in with each on the Preview's branch URL (the callback URLs must be registered, see "Preview" below and `.env.example`), set a Username, sign out and in again, and confirm one provider cannot reach the other's Member. For LINE, try an account that returns no email.
 3. **Suspension and withdrawal with real sessions**: withdraw a test Member and confirm its photos disappear from R2.
 4. **Demo Recipes**: run `pnpm db:seed:recipes` against the Preview/production database with `R2_*` set and open the top page.
 5. **Backup**: run the Backup workflow by hand, check the object in the backup bucket, and run `pg_restore --list` on a downloaded copy. Then enable the schedule in `backup.yml` before launch, and check that the bucket has no public access or custom domain and that the `production` environment is limited to `main`.
@@ -186,6 +186,43 @@ Issue、PR、レビュー、コメント、コミットメッセージは日本�
 
 - PR には対応する Issue を `Closes #N` で書きます。
 - レビューは先頭行に `APPROVE` または `REQUEST CHANGES` を書き、続けて日本語で理由を書きます(例: `REQUEST CHANGES: 修正が必要です`)。
+
+## Preview (Vercel + Neon + R2 + OAuth)
+
+Steps and pitfalls for bringing up a Preview, the environment that "What is still unchecked" above is run on. No secrets here: values go only into the Vercel project's variables. Photos, Auth and Backup are described in their own sections.
+
+**Neon**
+
+1. Create a project (region near `sin1`, see below). Use one branch for `production` and one for `preview`, each with its own connection strings. Create `preview` before `production` holds real Members: a branch copies its parent's data.
+2. Every branch has a **Direct** string (host without `-pooler`) and a **Pooled** one (`-pooler`, PgBouncer in transaction mode). The app (Vercel's `DATABASE_URL`) uses **Pooled**: every function instance opens its own connections, and Neon Free's direct limit (about 97 on the smallest compute) is easy to exhaust. `pnpm db:migrate`, the seeds and `pg_dump` use **Direct**; they need session behaviour, which a transaction pooler does not give.
+3. Neon's strings end in `sslmode=require`. Change it to `sslmode=verify-full`: pg treats `require` as `verify-full` today and warns that v9 changes it. The connection string is not rewritten in code.
+4. Migrate the new branch from your shell, with the Direct string typed in so it stays out of the history and files:
+
+   ```sh
+   read -rs DATABASE_URL && export DATABASE_URL   # paste the Direct string, Enter; nothing is echoed
+   pnpm db:migrate
+   pnpm db:seed:ingredients                       # optional, see Run
+   unset DATABASE_URL
+   ```
+
+   Skipping this makes the first sign-in fail with `relation "verification" does not exist` (Better Auth's table). Run it again whenever `drizzle/` gains a migration; keep migrations backward compatible, because the running Preview keeps serving until the next deploy.
+
+**Vercel**
+
+1. Import the repository with the **SvelteKit** preset and Node.js **22** (Project Settings, Build and Deployment). The function region is fixed to `sin1` in `vite.config.ts`; nothing to set.
+2. Add the variables of `.env.example` (`DATABASE_URL`, `BETTER_AUTH_*`, `GOOGLE_*`, `LINE_*`, `R2_*`) for the **Preview** environment only. `BETTER_AUTH_SECRET` is `openssl rand -base64 32`; use a different value from production.
+3. **A deployment keeps the variables and code it was built with.** After changing a variable, **Redeploy**; the old deployments (and their URLs) do not change.
+4. Previews sit behind Vercel's Deployment Protection by default, so a visitor is asked to sign in to Vercel first. Be signed in to Vercel in the browser you test with, or relax the protection for the test.
+
+**Which URL: the branch URL, not the deployment URL**
+
+Each deployment has a unique URL (`cocktail-party-<random>-<team>.vercel.app`) that is frozen to the variables and code of that deployment. The branch has a stable URL (`cocktail-party-git-develop-<team>.vercel.app`) that always serves the branch's latest deployment. Use only the **branch URL** for `BETTER_AUTH_URL`, the OAuth callbacks and when testing. A unique URL as `BETTER_AUTH_URL` is wrong after the next deploy, and opening an old deployment shows what it was built with: `password authentication failed` after `DATABASE_URL` was fixed, or `redirect_uri_mismatch` after `BETTER_AUTH_URL` or an OAuth setting was fixed. If you see these, check you are on the branch URL and have redeployed.
+
+**Google** (Cloud Console, OAuth client of type Web): Authorized JavaScript origins `<BETTER_AUTH_URL>`; Authorized redirect URIs `<BETTER_AUTH_URL>/api/auth/callback/google`. On the consent screen, a publishing status of Testing lets only the listed test users sign in; add yourself or publish it.
+
+**LINE** (LINE Developers, LINE Login channel): Callback URL `<BETTER_AUTH_URL>/api/auth/callback/line`. While the channel is Developing, only its admins and testers can sign in; publish it for anyone else. A LINE login may return no email (FR-050); the app handles it (Auth section).
+
+**R2** (Cloudflare): the Photo bucket is served publicly (custom domain, or `r2.dev` for a trial; `R2_PUBLIC_BASE_URL` is that base URL). The backup bucket is private: no public access, no custom domain (Backup section). An R2 API token is limited to chosen buckets: make one per bucket, Object Read & Write, and never let the Photo token reach the backup bucket or the reverse.
 
 ## Recipe form (FR-001..007, FR-020..023)
 
