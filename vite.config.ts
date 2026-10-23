@@ -34,7 +34,8 @@ export default defineConfig({
 				runes: ({ filename }) =>
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
-			adapter: adapter()
+			// Run next to the Neon database (Singapore); without it functions start in iad1 (US East).
+			adapter: adapter({ regions: ['sin1'] })
 		})
 	],
 	test: {
