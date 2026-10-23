@@ -49,6 +49,10 @@
 	// form, so a second click or Enter cannot publish a duplicate Recipe (FR-001).
 	let submitting = $state(false);
 	let savedId = $state<string>();
+	// The key of the last publish attempt and the body it went with (ADR 0007). A resend of the same
+	// body (the answer was lost, or the save failed) reuses the key, so the server answers with the
+	// Recipe it already published; a changed body is a different Recipe and gets a new key.
+	let attempt: { body: string; key: string | undefined } | undefined;
 	let formError = $state<string>();
 	let uploads = $state(0);
 	let uploadError = $state<string>();
@@ -231,9 +235,15 @@
 		submitting = true;
 		try {
 			const json = toPayload(values);
-			const res = recipeId
-				? await client.api.recipes[':id'].$put({ param: { id: recipeId }, json })
-				: await client.api.recipes.$post({ json });
+			let res;
+			if (recipeId) res = await client.api.recipes[':id'].$put({ param: { id: recipeId }, json });
+			else {
+				const body = JSON.stringify(json);
+				if (attempt?.body !== body)
+					// Older browsers (and non-secure origins) lack randomUUID: publish without a key.
+					attempt = { body, key: globalThis.crypto?.randomUUID?.() };
+				res = await client.api.recipes.$post({ json: { ...json, idempotencyKey: attempt.key } });
+			}
 			const body = await res.json().catch(() => null);
 			if (res.ok && body && 'id' in body) savedId = body.id;
 			else formError = apiErrorMessage(body && 'error' in body ? body.error : undefined);

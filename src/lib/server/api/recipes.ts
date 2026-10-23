@@ -55,6 +55,14 @@ function parseRecipeBody(v: unknown): (RecipeInput & { resetOverride?: boolean }
 	};
 }
 
+/** POST body: a Recipe plus an optional client-made `idempotencyKey` (its shape is the service's to judge). */
+function parseCreateBody(v: unknown) {
+	const input = parseRecipeBody(v);
+	const idempotencyKey = isRecord(v) ? v.idempotencyKey : undefined;
+	if (!input || (idempotencyKey !== undefined && typeof idempotencyKey !== 'string')) return null;
+	return { ...input, idempotencyKey: idempotencyKey as string | undefined };
+}
+
 const list = (s: string | undefined) => (s ? s.split(',').filter(Boolean) : undefined);
 // Non-numeric text becomes NaN so the service answers invalid_query; absent/empty stays undefined.
 const num = (s: string | undefined) => (s ? Number(s) : undefined);
@@ -97,9 +105,10 @@ export const recipesRoute = ({ store }: { store: () => ImageStore }) =>
 			'/',
 			requireMember,
 			jsonBodyLimit,
-			validator('json', (b, c) => parseRecipeBody(b) ?? invalidRequest(c)),
+			validator('json', (b, c) => parseCreateBody(b) ?? invalidRequest(c)),
 			async (c) => {
-				const result = await createRecipe(db, actorOf(c), c.req.valid('json'));
+				const { idempotencyKey, ...input } = c.req.valid('json');
+				const result = await createRecipe(db, actorOf(c), input, idempotencyKey);
 				if (!result.ok) return c.json({ error: result.error }, statusOf(result.error));
 				return c.json(result.value, 201);
 			}
