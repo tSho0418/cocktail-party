@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { and, count, eq } from 'drizzle-orm';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { db } from '#lib/server/db/index.js';
-import { like, photoUpload } from '#lib/server/db/schema.js';
+import { like, photoUpload, recipe } from '#lib/server/db/schema.js';
 import { MAX_JSON_BYTES } from './http';
 import { createApp } from './app';
 import { call, seedMember, store, uploadPhoto, type TestMember } from './test-helpers';
@@ -88,6 +88,100 @@ describe('POST /api/recipes', () => {
 			effectiveAbv: 15,
 			bases: [{ name: `ジン${tag}` }]
 		});
+	});
+});
+
+describe('POST /api/recipes with an idempotency key', () => {
+	const countFor = async (as: TestMember, title: string) =>
+		(
+			await db
+				.select({ n: count() })
+				.from(recipe)
+				.where(and(eq(recipe.memberId, as.id), eq(recipe.title, title)))
+		)[0].n;
+
+	it('a resent request returns the same Recipe and publishes only one', async () => {
+		const title = `冪等${tag}`;
+		const body = await recipeBody(alice, title, { idempotencyKey: randomUUID() });
+		const first = await call(alice, 'POST', '/recipes', body);
+		const again = await call(alice, 'POST', '/recipes', body);
+		expect(first.status).toBe(201);
+		expect(again.status).toBe(201);
+		expect(await again.json()).toEqual(await first.json());
+		expect(await countFor(alice, title)).toBe(1);
+	});
+
+	it('two requests at once publish one Recipe and both succeed', async () => {
+		const title = `同時${tag}`;
+		const body = await recipeBody(alice, title, { idempotencyKey: randomUUID() });
+		const [a, b] = await Promise.all([
+			call(alice, 'POST', '/recipes', body),
+			call(alice, 'POST', '/recipes', body)
+		]);
+		expect([a.status, b.status]).toEqual([201, 201]);
+		expect((await a.json()).id).toBe((await b.json()).id);
+		expect(await countFor(alice, title)).toBe(1);
+	});
+
+	it('still answers with the Recipe after an edit released its photo', async () => {
+		const title = `写真後${tag}`;
+		const body = await recipeBody(alice, title, { idempotencyKey: randomUUID() });
+		const { id } = await (await call(alice, 'POST', '/recipes', body)).json();
+		// The edit releases the first upload, so a request without the key is now 422.
+		const edit = await call(alice, 'PUT', `/recipes/${id}`, await recipeBody(alice, `${title}2`));
+		expect(edit.status).toBe(200);
+		const again = await call(alice, 'POST', '/recipes', body);
+		expect(again.status).toBe(201);
+		expect((await again.json()).id).toBe(id);
+		const keyless = await call(alice, 'POST', '/recipes', { ...body, idempotencyKey: undefined });
+		expect(keyless.status).toBe(422);
+	});
+
+	it('is scoped to the Member: another Member with the same key publishes their own', async () => {
+		const key = randomUUID();
+		const mine = await call(
+			alice,
+			'POST',
+			'/recipes',
+			await recipeBody(alice, `鍵A${tag}`, { idempotencyKey: key })
+		);
+		const theirs = await call(
+			bob,
+			'POST',
+			'/recipes',
+			await recipeBody(bob, `鍵B${tag}`, { idempotencyKey: key })
+		);
+		expect(theirs.status).toBe(201);
+		expect((await theirs.json()).id).not.toBe((await mine.json()).id);
+		expect(await countFor(bob, `鍵B${tag}`)).toBe(1);
+	});
+
+	it('without a key every request publishes, as before', async () => {
+		const title = `鍵なし${tag}`;
+		const a = await createRecipe(alice, title);
+		const b = await createRecipe(alice, title);
+		expect(a).not.toBe(b);
+		expect(await countFor(alice, title)).toBe(2);
+	});
+
+	it('400 for a key that is not a string, 422 for one that is not a UUID', async () => {
+		const notString = await call(
+			alice,
+			'POST',
+			'/recipes',
+			await recipeBody(alice, 'x', { idempotencyKey: 1 })
+		);
+		expect(notString.status).toBe(400);
+		for (const idempotencyKey of ['', 'abc', 'not-a-uuid-at-all-0000-000000000000']) {
+			const res = await call(
+				alice,
+				'POST',
+				'/recipes',
+				await recipeBody(alice, 'x', { idempotencyKey })
+			);
+			expect(res.status).toBe(422);
+			expect((await res.json()).error).toBe('idempotency_key_invalid');
+		}
 	});
 });
 

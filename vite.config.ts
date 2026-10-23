@@ -25,6 +25,30 @@ if (process.env.VITEST_DB) {
 	process.env.LINE_CLIENT_SECRET = 'test-line-secret';
 }
 
+// Tests must not depend on a developer's .env (CI has none): blank every R2_* and OAuth variable the
+// tests read through `$app/env/private`. SvelteKit snapshots env when this config loads and process.env
+// wins over .env, so this has to happen here. R2_* are blanked for both projects; OAuth only without
+// VITEST_DB (the db block above has already set dummies, which must stay). `VITEST` is set by vitest
+// before it loads the config.
+if (process.env.VITEST) {
+	for (const name of [
+		'R2_ACCOUNT_ID',
+		'R2_ACCESS_KEY_ID',
+		'R2_SECRET_ACCESS_KEY',
+		'R2_BUCKET',
+		'R2_PUBLIC_BASE_URL'
+	])
+		process.env[name] = '';
+	if (!process.env.VITEST_DB)
+		for (const name of [
+			'GOOGLE_CLIENT_ID',
+			'GOOGLE_CLIENT_SECRET',
+			'LINE_CLIENT_ID',
+			'LINE_CLIENT_SECRET'
+		])
+			process.env[name] = '';
+}
+
 export default defineConfig({
 	plugins: [
 		tailwindcss(),

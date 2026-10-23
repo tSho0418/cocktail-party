@@ -22,6 +22,13 @@
       "when": 1792342470789,
       "tag": "0002_photo_upload",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792761082515,
+      "tag": "0003_recipe_idempotency_key",
+      "breakpoints": true
     }
   ]
 }

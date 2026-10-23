@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import type { PgDatabase } from 'drizzle-orm/pg-core';
 import type { NodePgQueryResultHKT } from 'drizzle-orm/node-postgres';
 import * as schema from '#lib/server/db/schema.js';
@@ -144,7 +144,8 @@ async function writeRecipe(
 	v: Required<RecipeInput>,
 	ings: { name: string }[],
 	derived: ReturnType<typeof recomputeDerived>,
-	abvOverride: number | null
+	abvOverride: number | null,
+	idempotencyKey: string | null = null
 ) {
 	const values = {
 		title: v.title,
@@ -157,10 +158,20 @@ async function writeRecipe(
 	};
 	let id: string;
 	if (recipeId == null) {
-		[{ id }] = await tx
+		// Only the idempotency key's partial unique index is the conflict target: a conflict means a
+		// POST with this key committed first (no row back; the caller answers with its Recipe). Any
+		// other unique violation is not ours to swallow and surfaces as an error. drizzle writes
+		// `where` (not `targetWhere`) into ON CONFLICT ... DO NOTHING.
+		const [row] = await tx
 			.insert(recipe)
-			.values({ ...values, memberId })
+			.values({ ...values, memberId, idempotencyKey })
+			.onConflictDoNothing({
+				target: [recipe.memberId, recipe.idempotencyKey],
+				where: isNotNull(recipe.idempotencyKey)
+			})
 			.returning({ id: recipe.id });
+		if (!row) return null;
+		id = row.id;
 	} else {
 		id = recipeId;
 		await tx.update(recipe).set(values).where(eq(recipe.id, id));
@@ -186,16 +197,36 @@ async function writeRecipe(
 	return id;
 }
 
-/** FR-001: publish a Recipe; derived Alcohol columns are stored in the same transaction (ADR 0004). */
+/**
+ * FR-001: publish a Recipe; derived Alcohol columns are stored in the same transaction (ADR 0004).
+ *
+ * `idempotencyKey` (a UUID the client makes per attempt, ADR 0007) makes a resent request answer
+ * with the Recipe the first one published instead of publishing another. Keys are per Member.
+ * The lookup comes first, before the photo check: the first request has already attached the
+ * photos (an edit may even have released them since), and a resend must not fail on that.
+ */
 export async function createRecipe(
 	db: Db,
 	actor: Actor,
-	input: RecipeInput
-): Promise<Result<{ id: string }, RecipeInputError | 'suspended'>> {
+	input: RecipeInput,
+	idempotencyKey?: string
+): Promise<Result<{ id: string }, RecipeInputError | 'suspended' | 'idempotency_key_invalid'>> {
 	if (actor.suspended) return fail('suspended');
+	if (idempotencyKey !== undefined && !isUuid(idempotencyKey))
+		return fail('idempotency_key_invalid');
 	const v = validateRecipeInput(input);
 	if (!v.ok) return v;
 	return db.transaction(async (tx) => {
+		const published = async () => {
+			if (idempotencyKey === undefined) return null;
+			const [row] = await tx
+				.select({ id: recipe.id })
+				.from(recipe)
+				.where(and(eq(recipe.memberId, actor.memberId), eq(recipe.idempotencyKey, idempotencyKey)));
+			return row ? ok({ id: row.id }) : null;
+		};
+		const before = await published();
+		if (before) return before;
 		const keys = [v.value.mainPhotoKey, ...v.value.extraPhotoKeys];
 		if (!(await lockPhotos(tx, 'recipe', keys)).ownedBy(actor.memberId, keys))
 			return fail('photo_key_invalid');
@@ -208,8 +239,25 @@ export async function createRecipe(
 			if (!o.ok) return o;
 			override = o.value;
 		}
-		const id = await writeRecipe(tx, null, actor.memberId, v.value, ings.value, derived, override);
-		return ok({ id });
+		const id = await writeRecipe(
+			tx,
+			null,
+			actor.memberId,
+			v.value,
+			ings.value,
+			derived,
+			override,
+			idempotencyKey ?? null
+		);
+		if (id !== null) return ok({ id });
+		// A request with the same key committed first (our INSERT waited for its transaction, which
+		// holds every lock it needed already, so this wait cannot form a cycle): answer with its Recipe.
+		const existing = await published();
+		if (!existing)
+			throw new Error(
+				`recipe insert hit no row for idempotency key ${idempotencyKey} but no Recipe has it`
+			);
+		return existing;
 	});
 }
 
@@ -293,48 +341,6 @@ export async function updateRecipe(
 			overrideDiscarded: derived.overrideDiscarded,
 			removedPhotoKeys: await releaseUnreferenced(tx, 'recipe', photos.ids)
 		});
-	});
-}
-
-/** FR-021/022/024: the owner overrides the Alcohol Content of a Recipe with alcohol. */
-export async function setAbvOverride(
-	db: Db,
-	actor: Actor,
-	recipeId: string,
-	override: number
-): Promise<
-	Result<{ abvOverride: number }, AccessError | 'override_not_allowed' | 'override_invalid'>
-> {
-	return db.transaction(async (tx) => {
-		const cur = await lockRecipe(tx, actor, recipeId);
-		if (!cur.ok) return cur;
-		const [{ max }] = await tx
-			.select({ max: sql<number>`coalesce(max(${ingredient.abvPercent}), 0)`.mapWith(Number) })
-			.from(recipeIngredient)
-			.innerJoin(ingredient, eq(ingredient.id, recipeIngredient.ingredientId))
-			.where(eq(recipeIngredient.recipeId, recipeId));
-		const v = validateAbvOverride({
-			override,
-			hasAlcohol: cur.value.hasAlcohol,
-			maxIngredientAbv: max
-		});
-		if (!v.ok) return fail(v.error === 'no_alcohol' ? 'override_not_allowed' : 'override_invalid');
-		await tx.update(recipe).set({ abvOverride: v.value }).where(eq(recipe.id, recipeId));
-		return ok({ abvOverride: v.value });
-	});
-}
-
-/** FR-023 "recompute": drop the override so the stored auto value shows again. */
-export async function clearAbvOverride(
-	db: Db,
-	actor: Actor,
-	recipeId: string
-): Promise<Result<null, AccessError>> {
-	return db.transaction(async (tx) => {
-		const cur = await lockRecipe(tx, actor, recipeId);
-		if (!cur.ok) return cur;
-		await tx.update(recipe).set({ abvOverride: null }).where(eq(recipe.id, recipeId));
-		return ok(null);
 	});
 }
 

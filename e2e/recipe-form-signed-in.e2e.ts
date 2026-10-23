@@ -128,6 +128,72 @@ test('a failed save keeps the form, tells the Member, and the retry publishes on
 	expect(await recipesTitled(title)).toHaveLength(1);
 });
 
+test('a response lost after the server saved does not publish twice when the Member resends (#46)', async ({
+	page
+}) => {
+	const title = `E2E応答消失${tag}`;
+	await stubUploads(page);
+	await page.goto('/recipes/new');
+	await page.getByLabel('タイトル').fill(title);
+	await pickPhoto(page, '完成写真を選ぶ');
+	await addIngredient(page, gin, '2');
+	await page.getByRole('textbox', { name: 'ステップ 1' }).fill('注ぐ');
+
+	// The server handles the first request, then the answer never reaches the browser.
+	let attempts = 0;
+	await page.route('**/api/recipes', async (route) => {
+		if (route.request().method() !== 'POST' || attempts++ > 0) return route.continue();
+		await route.fetch();
+		await route.abort('failed');
+	});
+	const submit = page.getByRole('button', { name: '投稿する' });
+	await submit.click();
+	await expect(
+		page
+			.getByRole('alert')
+			.filter({ hasText: '保存できませんでした。通信状況を確認してください。' })
+	).toBeFocused();
+	await expect(submit).toBeEnabled();
+	expect(await recipesTitled(title)).toHaveLength(1); // it was saved, the Member could not know
+
+	await submit.click();
+	await expect(page).toHaveURL(/\/recipes\/[0-9a-f-]{36}$/);
+	expect(await recipesTitled(title)).toHaveLength(1);
+});
+
+test('a resend of the same form reuses the idempotency key; an edited form gets a new one', async ({
+	page
+}) => {
+	const title = `E2E鍵${tag}`;
+	await stubUploads(page);
+	await page.goto('/recipes/new');
+	await page.getByLabel('タイトル').fill(title);
+	await pickPhoto(page, '完成写真を選ぶ');
+	await addIngredient(page, gin, '2');
+	await page.getByRole('textbox', { name: 'ステップ 1' }).fill('注ぐ');
+
+	const keys: string[] = [];
+	await page.route('**/api/recipes', async (route) => {
+		if (route.request().method() !== 'POST') return route.continue();
+		keys.push(route.request().postDataJSON().idempotencyKey);
+		await route.abort('failed'); // the request never reaches the server
+	});
+	const submit = page.getByRole('button', { name: '投稿する' });
+	await submit.click();
+	await expect(submit).toBeEnabled();
+	await submit.click();
+	await expect.poll(() => keys.length).toBe(2);
+	await expect(submit).toBeEnabled();
+	await page.getByLabel('タイトル').fill(`${title}改`);
+	await submit.click();
+	await expect.poll(() => keys.length).toBe(3);
+
+	expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/);
+	expect(keys[1]).toBe(keys[0]);
+	expect(keys[2]).not.toBe(keys[0]);
+	expect(await recipesTitled(title)).toHaveLength(0);
+});
+
 test('an incomplete form is not sent; focus moves to the list of what to fix', async ({ page }) => {
 	await page.goto('/recipes/new');
 	await page.getByRole('button', { name: '投稿する' }).click();

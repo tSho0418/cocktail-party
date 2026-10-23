@@ -1,5 +1,6 @@
 // Query-plan check on ~2,000 generated Recipes; prints EXPLAIN ANALYZE, asserts no timings.
-// Run alone (it commits data, then truncates); EXPLAIN_SEARCH is the report path:
+// It commits data and truncates member/ingredient afterwards, which is safe because every
+// `pnpm test:db` run has its own database. EXPLAIN_SEARCH is the report path (not `1`):
 // EXPLAIN_SEARCH=/tmp/explain.txt pnpm test:db search.explain
 import { writeFileSync } from 'node:fs';
 import { sql } from 'drizzle-orm';
@@ -9,9 +10,10 @@ import { afterAll, describe, expect, it } from 'vitest';
 import * as schema from '#lib/server/db/schema.js';
 import { recomputeDerived } from '#lib/domain/alcohol/index.js';
 import { searchRecipes, type SearchParams } from './search';
+import { seedMember } from './test-fixtures';
 
 describe.skipIf(!process.env.EXPLAIN_SEARCH)('searchRecipes EXPLAIN on 2,000 Recipes', () => {
-	const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL_TEST });
+	const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 	let last: { query: string; params: unknown[] }[] = [];
 	const db = drizzle({
 		client: pool,
@@ -49,16 +51,9 @@ describe.skipIf(!process.env.EXPLAIN_SEARCH)('searchRecipes EXPLAIN on 2,000 Rec
 			'ミントを叩く'
 		];
 
-		const members = await db
-			.insert(schema.member)
-			.values(
-				Array.from({ length: 200 }, (_, n) => ({
-					provider: 'google',
-					providerAccountId: `x${n}`,
-					username: `user_${n}`
-				}))
-			)
-			.returning({ id: schema.member.id });
+		const members: { id: string }[] = [];
+		for (let n = 0; n < 200; n++)
+			members.push({ id: (await seedMember(db, `user_${n}`)).memberId });
 		const ings = await db
 			.insert(schema.ingredient)
 			.values(

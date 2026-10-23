@@ -51,13 +51,17 @@ pnpm dev                    # http://localhost:5173
 
 `DATABASE_URL_TEST` names only the server and credentials (default `postgres://postgres:postgres@localhost:5432/postgres`). Each `pnpm test:db` run creates its own database `cocktail_party_test_<random>`, applies `drizzle/`, runs the tests and drops it afterwards, also when tests fail. Several worktrees can therefore share one Postgres and run `pnpm test:db` at the same time. A run killed hard (e.g. `kill -9`) can leave a `cocktail_party_test_*` database behind; drop it by hand.
 
+The query-plan check on ~2,000 generated Recipes is skipped unless `EXPLAIN_SEARCH` names a report file: `EXPLAIN_SEARCH=/tmp/explain.txt pnpm test:db search.explain`.
+
 The app database is shared, though: worktrees using the same `DATABASE_URL` see each other's data, and `pnpm db:reset` resets it for all of them. Give a worktree its own `DATABASE_URL` database name if that matters.
 
 ### Notes
 
 The first migration enables `pg_trgm` by a line added by hand to `drizzle/0000_init.sql`; drizzle-kit does not emit `CREATE EXTENSION`.
 
-The DB client (`#lib/server/db`) uses node-postgres. Locally it talks to the compose Postgres; in production set `DATABASE_URL` to Neon's pooled connection string (`-pooler` host, `sslmode=require`).
+The DB client (`#lib/server/db`) uses node-postgres. Locally it talks to the compose Postgres. The Preview currently uses Neon's **Direct** string; switching to Pooled is undecided, see "Preview" below. For node-postgres write `sslmode=verify-full` in the string (not for `pg_dump`, see "Preview").
+
+The pool is small on purpose (`max: 5`, idle connections closed after 5 s, 10 s to connect); the reasons are in the comment in `src/lib/server/db/index.ts`. Every connection has a permanent `error` listener (pg-pool only listens while a connection is idle, so one held by a transaction would otherwise crash the process when the server cuts it), and the pool is passed to `attachDatabasePool` from `@vercel/functions`, which keeps a Fluid compute instance alive until idle connections are closed so a suspended instance does not leak them (Vercel's guide "Connection Pooling with Vercel Functions"). It is still marked `@experimental` in the package and does nothing outside Vercel, so it has not been seen working here; the db tests cover only the pool settings and the `error` handling.
 
 ## API
 
@@ -67,7 +71,7 @@ Routes live in `src/lib/server/api/` and only validate the request shape, call a
 | ---------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /api/recipes`                                         | anyone        | Search (FR-041..045), keyset: `ingredientIds`/`baseIds` (comma-separated), `onlyThese`, `keyword`, `abvMin`, `abvMax`, `nonAlcoholic` (`true`), `sort=new\|like`, `limit`, `cursor`                               |
 | `GET /api/recipes/:id`                                     | anyone        | Detail (FR-046)                                                                                                                                                                                                   |
-| `POST /api/recipes`                                        | Member        | Publish, 201 `{ id }` (FR-001..007)                                                                                                                                                                               |
+| `POST /api/recipes`                                        | Member        | Publish, 201 `{ id }` (FR-001..007); optional `idempotencyKey` (UUID, else 422 `idempotency_key_invalid`): a resend with the same key answers with the first Recipe, again 201 (ADR 0007)                         |
 | `PUT /api/recipes/:id`                                     | owner         | Replace the whole Recipe (FR-008); photos no longer referenced are deleted from storage                                                                                                                           |
 | `DELETE /api/recipes/:id`                                  | owner, admin  | 204; unreferenced photos are deleted from storage                                                                                                                                                                 |
 | `GET /api/ingredients/suggest`                             | anyone        | `?name=&limit=` similar existing Ingredients (FR-014)                                                                                                                                                             |
@@ -91,6 +95,8 @@ Photo ownership (ADR 0006): `POST /api/photos` records the uploader in `photo_up
 Member icons follow the same rule: `updateProfile` accepts only a `member/<uuid>/list.webp` key whose `photo_upload` row (`kind = 'member'`) belongs to the Member (`icon_key_invalid` otherwise; the current icon is always accepted), and an icon that is replaced or removed has its row deleted in the same transaction and its objects deleted after commit.
 
 **Lock order** (ADR 0006, #40, #45): a transaction that locks Recipes, photo uploads, Ingredients and a Member takes them in this one order, each kind in id order, skipping the kinds it does not need: **Recipe rows, then `photo_upload` rows, then `ingredient` rows, then the `member` row**. `updateRecipe` and `deleteRecipe` lock the Recipe (`lockRecipe`), then the uploads of its old and new photos (`lockPhotos`); `updateRecipe` then share-locks the Ingredients it uses (`loadIngredients`, `FOR SHARE`: an ABV edit waits for it, and shares do not wait for each other); `createRecipe` has no Recipe row yet, so it locks the uploads, then the Ingredients, and its INSERT then takes the Member's `FOR KEY SHARE`; `updateIngredientAbv` (FR-015) locks the Recipes that use the Ingredient, then the Ingredient row, and then reads those Recipes again: one that started using the Ingredient in between is not locked, and locking it now would be out of order, so the transaction ends without writing and a new one starts, once for each such edit that commits in that gap; `updateProfile` locks the icon uploads, then the Member row; `withdrawMember` locks all of the Member's Recipes, then all of their uploads, then the Member row, before the cascading DELETE; the sweep locks upload rows only, with `SKIP LOCKED`. Following the order is what lets a withdrawal and a Recipe write by the same Member, or a Recipe edit and an ABV edit, both finish instead of deadlocking. The one place that does not follow it exactly is the withdrawal's cascade, which sets `ingredient.created_by` to null last, after the `member` row is deleted (in effect Member, then Ingredient); no combination that deadlocks through it has been found.
+
+Publishing is idempotent when the client sends an `idempotencyKey` (ADR 0007, #46): `RecipeForm` makes a UUID per publish attempt, reuses it while the form body is unchanged (a resend after a lost response) and makes a new one when the Member edits the form. `recipe.idempotency_key` is nullable with a partial unique index on `(member_id, idempotency_key)` (keys are per Member). `createRecipe` first looks the key up (a plain SELECT, no lock, so the Lock order is unchanged) and, if found, returns that Recipe before the photo check (the first request already used the photos, and an edit may have released them); a request that loses the race hits `ON CONFLICT (member_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING` (any other unique violation still throws) and returns the winner's Recipe. Its INSERT may wait for the winner's transaction, which has taken all its locks already, so the wait cannot form a cycle; with the same photo the loser waits earlier, in `lockPhotos`. Requests without a key behave as before.
 
 Input bounds: `GET /api/recipes` takes at most 10 `keyword` terms and 20 `ingredientIds` / 20 `baseIds` (400 `invalid_query` beyond that); `GET /api/ingredients/suggest` takes a `name` of at most 100 characters (400); JSON bodies of `POST`/`PUT /api/recipes` and `POST /api/ingredients` (and the ABV `PATCH`) are limited to 64KB (413 `too_large`).
 
@@ -118,7 +124,7 @@ Better Auth runs inside the app (ADR 0005); its endpoints are under `/api/auth/*
 - `src/hooks.server.ts` runs `authHandle` before `apiHandle`. `locals.member` (`{ id, username, isAdministrator }` or null) reaches Hono as `c.env.locals.member`. Guards: `requireMember`, `requireAdministrator` and `authorizePhotoUpload` in `#lib/server/auth/guards.js`. A Member without a Username is redirected to `/welcome` and gets 403 from guarded API routes.
 - Withdrawal: `withdrawMember` in `#lib/server/services/members` deletes everything in one transaction and returns the storage keys to delete: Main and extra Photos, the icon, and both files of every `photo_upload` row of the Member, used or not (the rows go with the Member). It takes its locks in the Lock order described under Photo ownership (API section), so a withdrawal and a Recipe write by the same Member cannot deadlock. The `/withdraw` action runs it first; only once it has committed does it delete the objects with `deleteObjects` (best effort, each failed key logged) and sign out, so a failed withdrawal leaves the Member signed in to retry. Reachable without a Username, like `/welcome` and `/logout`.
 
-The db tests drive Better Auth's real sign-in and callback for LINE with the token endpoint stubbed. Real Google/LINE logins have not been tried.
+The db tests drive Better Auth's real sign-in and callback for LINE with the token endpoint stubbed. A real Google login has been confirmed on a Preview; a real LINE login has not been tried.
 
 ## Age Gate (FR-060..062)
 
@@ -166,11 +172,12 @@ Each Recipe's Main Photo is a generated gradient card, not a photo of the drink;
 None of these can be exercised without real credentials. Deploy a Preview with the production-like variables, then:
 
 1. **R2 and `sharp` on Vercel** (also the Known limits above): sign in, create a Recipe with a JPEG that has GPS EXIF (any phone photo), and confirm `POST /api/photos` returns 201, the image shows on the Recipe page, and the stored `*.webp` has no EXIF (`exiftool` on the downloaded file). Then delete the Recipe and check both objects are gone from the bucket.
-2. **Google and LINE login**: sign in with each on the Preview URL (the callback URLs must be registered, see `.env.example`), set a Username, sign out and in again, and confirm one provider cannot reach the other's Member. For LINE, try an account that returns no email.
+2. **Google and LINE login**: sign in with each on the Preview's branch URL (the callback URLs must be registered, see "Preview" below and `.env.example`), set a Username, sign out and in again, and confirm one provider cannot reach the other's Member. For LINE, try an account that returns no email.
 3. **Suspension and withdrawal with real sessions**: withdraw a test Member and confirm its photos disappear from R2.
 4. **Demo Recipes**: run `pnpm db:seed:recipes` against the Preview/production database with `R2_*` set and open the top page.
-5. **Backup**: run the Backup workflow by hand, check the object in the backup bucket, and run `pg_restore --list` on a downloaded copy. Then enable the schedule in `backup.yml` before launch, and check that the bucket has no public access or custom domain and that the `production` environment is limited to `main`.
+5. **Backup**: run the Backup workflow by hand (its `DATABASE_URL` keeps `sslmode=require`, see "Preview"), check the object in the backup bucket, and run `pg_restore --list` on a downloaded copy. Then enable the schedule in `backup.yml` before launch, and check that the bucket has no public access or custom domain and that the `production` environment is limited to `main`.
 6. **Terms and Privacy**: fill in `src/lib/legal.ts` (operator name, contact and date are still provisional) and have both pages reviewed. The footer already links to them.
+7. **LINE deauthorization on withdrawal**: LINE's development guidelines ask the app to remove the app link (deauthorize) on the LINE side when a Member withdraws; `withdrawMember` does not do this yet. Check the current guideline and decide before launch.
 
 ## Branches, CI and deploy
 
@@ -186,6 +193,55 @@ Issue、PR、レビュー、コメント、コミットメッセージは日本�
 
 - PR には対応する Issue を `Closes #N` で書きます。
 - レビューは先頭行に `APPROVE` または `REQUEST CHANGES` を書き、続けて日本語で理由を書きます(例: `REQUEST CHANGES: 修正が必要です`)。
+
+## Preview (Vercel + Neon + R2 + OAuth)
+
+Steps and pitfalls for bringing up a Preview, the environment that "What is still unchecked" above is run on. No secrets here: values go only into the Vercel project's variables. Photos, Auth and Backup are described in their own sections.
+
+**Neon**
+
+1. Create a project (region near `sin1`, see below). Use one branch for `production` and one for `preview`, each with its own connection strings. Create `preview` before `production` holds real Members: a branch copies its parent's data.
+2. Every branch has a **Direct** string (host without `-pooler`) and a **Pooled** one (`-pooler`, PgBouncer in transaction mode). **The current Preview's `DATABASE_URL` is the Direct string; whether to go back to Pooled is undecided.** Pooled is the usual choice for functions: every function instance opens its own connections, and the direct limit (`max_connections` minus 7 reserved; 97 on a 0.25 CU compute, the smallest, so check `SHOW max_connections`, unverified for this project) is easy to exhaust. The app's pool is small for that reason (see Notes). `pnpm db:migrate`, the seeds and `pg_dump` always use **Direct**; they need session behaviour, which a transaction pooler does not give. Before switching the app to Pooled, see "Before switching back to Pooled" below.
+3. Neon's strings end in `sslmode=require`. For what **node-postgres** reads (the app's `DATABASE_URL`, `pnpm db:migrate`, the seed and sweep scripts), change it to `sslmode=verify-full`: pg treats `require` as `verify-full` today and warns that v9 changes it. The connection string is not rewritten in code. **Do not do this for `pg_dump`** (the Backup workflow's `DATABASE_URL` secret): that is libpq, where `verify-full` needs a root certificate file, so keep `sslmode=require` there. (`sslmode=verify-full&sslrootcert=system` might work with libpq; not tried, unverified. `backup.yml` has not run against Neon yet.)
+4. Migrate the new branch from your shell, with the Direct string typed in so it stays out of the history and files:
+
+   ```sh
+   read -rs DATABASE_URL && export DATABASE_URL   # paste the Direct string, Enter; nothing is echoed
+   pnpm db:migrate
+   pnpm db:seed:ingredients                       # optional, see Run
+   unset DATABASE_URL
+   ```
+
+   Skipping this makes the first sign-in fail with `relation "verification" does not exist` (Better Auth's table). Run it again whenever `drizzle/` gains a migration; keep migrations backward compatible, because the running Preview keeps serving until the next deploy.
+
+**Vercel**
+
+1. Import the repository with the **SvelteKit** preset and Node.js **22** (Project Settings, Build and Deployment). The function region is fixed to `sin1` in `vite.config.ts`; nothing to set.
+2. Add the variables of `.env.example` (`DATABASE_URL`, `BETTER_AUTH_*`, `GOOGLE_*`, `LINE_*`, `R2_*`) for the **Preview** environment only. `BETTER_AUTH_SECRET` is `openssl rand -base64 32`; use a different value from production. Neon's child branch probably keeps its parent's roles and passwords (unverified); reset the password if the `preview` branch should not share the production one.
+3. **A deployment keeps the variables and code it was built with.** After changing a variable, **Redeploy**; the old deployments (and their URLs) do not change. Redeploy the **branch's latest** deployment: Redeploy on an old deployment rebuilds that deployment's old code.
+4. A variable set for "Preview" applies to every preview, so a PR's preview also gets the `develop` branch URL as `BETTER_AUTH_URL`. Test sign-in on `develop` only: on a PR preview the callback goes to `develop`'s URL, not the PR's.
+5. Whether Previews sit behind Vercel's Deployment Protection by default is unverified; check Project Settings, Deployment Protection. If it is on, be signed in to Vercel in the browser you test with, or relax it for the test.
+
+**Which URL: the branch URL, not the deployment URL**
+
+Each deployment has a unique URL (`cocktail-party-<random>-<team>.vercel.app`) that is frozen to the variables and code of that deployment. The branch has a stable URL (`cocktail-party-git-develop-<team>.vercel.app`) that always serves the branch's latest deployment. Use only the **branch URL** for `BETTER_AUTH_URL`, the OAuth callbacks and when testing. A unique URL as `BETTER_AUTH_URL` is wrong after the next deploy, and opening an old deployment shows what it was built with: `password authentication failed` after `DATABASE_URL` was fixed, or `redirect_uri_mismatch` after `BETTER_AUTH_URL` or an OAuth setting was fixed. If you see these, check you are on the branch URL and have redeployed.
+
+**Google** (Cloud Console, OAuth client of type Web): Authorized JavaScript origins `<BETTER_AUTH_URL>`; Authorized redirect URIs `<BETTER_AUTH_URL>/api/auth/callback/google`. On the consent screen, a publishing status of Testing lets only the listed test users sign in; add yourself or publish it. Signing in with Google on the Preview has been confirmed.
+
+**LINE** (LINE Developers, LINE Login channel): Callback URL `<BETTER_AUTH_URL>/api/auth/callback/line`. Unverified: while the channel is Developing, only its admins and testers can sign in (this is LINE's documented model as far as I know; check the channel page). A LINE login may return no email (FR-050); the app handles it (Auth section). LINE sign-in on the Preview has not been tried.
+
+**R2** (Cloudflare): the Photo bucket is served publicly (custom domain, or `r2.dev` for a trial; `R2_PUBLIC_BASE_URL` is that base URL). The backup bucket is private: no public access, no custom domain (Backup section). An R2 API token is limited to chosen buckets: make one per bucket, Object Read & Write, and never let the Photo token reach the backup bucket or the reverse.
+
+**Before switching back to Pooled**
+
+The db tests and the Preview run on a direct or local connection, so nothing below has run through Neon's PgBouncer (transaction mode). On a Preview with the Pooled string, try each of these before relying on it:
+
+- creating and editing a Recipe (interactive transaction with row locks, Lock order under API);
+- registering a new Ingredient (`pg_advisory_xact_lock`, transaction-scoped, expected to work);
+- searching (`pg_trgm`);
+- `pnpm photos:sweep` (`FOR UPDATE SKIP LOCKED`).
+
+When adding code later, remember Neon's PgBouncer does not support `SET`, session-level advisory locks, `LISTEN` / `NOTIFY` or SQL-level `PREPARE` (a drizzle `.prepare('name')` among them).
 
 ## Recipe form (FR-001..007, FR-020..023)
 

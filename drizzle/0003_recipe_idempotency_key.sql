@@ -1,0 +1,2 @@
+ALTER TABLE "recipe" ADD COLUMN "idempotency_key" uuid;--> statement-breakpoint
+CREATE UNIQUE INDEX "recipe_member_idempotency_key_unique" ON "recipe" USING btree ("member_id","idempotency_key") WHERE "recipe"."idempotency_key" IS NOT NULL;
