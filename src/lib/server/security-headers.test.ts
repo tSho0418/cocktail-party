@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { PROVIDER_ORIGINS } from './auth/provider-origins';
 import {
+	CSP_DIRECTIVES,
 	NON_PAGE_CSP,
 	allowImageOrigin,
 	photoOrigin,
@@ -62,5 +64,11 @@ describe('withSecurityHeaders', () => {
 		expect(res.status).toBe(302);
 		expect(res.headers.get('location')).toBe('https://example.com/');
 		expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+	});
+});
+
+describe('page CSP', () => {
+	it('lets the sign-in form be redirected to every provider origin', () => {
+		expect(CSP_DIRECTIVES['form-action']).toEqual(expect.arrayContaining([...PROVIDER_ORIGINS]));
 	});
 });
