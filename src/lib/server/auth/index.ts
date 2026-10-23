@@ -11,6 +11,7 @@ import {
 	LINE_CLIENT_ID,
 	LINE_CLIENT_SECRET
 } from '$app/env/private';
+import { requireBaseUrlOnVercel } from './config';
 import { db } from '#lib/server/db/index.js';
 import { account, member, session, verification } from '#lib/server/db/schema.js';
 
@@ -24,7 +25,7 @@ const isSuspended = async (memberId: string) =>
 const createAuth = () =>
 	betterAuth({
 		secret: BETTER_AUTH_SECRET,
-		baseURL: BETTER_AUTH_URL,
+		baseURL: requireBaseUrlOnVercel(BETTER_AUTH_URL),
 		database: drizzleAdapter(db, {
 			provider: 'pg',
 			schema: { member, account, session, verification }

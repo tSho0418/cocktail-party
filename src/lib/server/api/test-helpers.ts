@@ -34,7 +34,11 @@ export function call(
 			`/api${path}`,
 			{
 				method,
-				headers: body === undefined ? {} : { 'content-type': 'application/json' },
+				// A browser always sends Origin on a PUT/DELETE, including one without a body (hono/csrf).
+				headers: {
+					origin: 'http://localhost',
+					...(body === undefined ? {} : { 'content-type': 'application/json' })
+				},
 				body: body === undefined ? undefined : JSON.stringify(body)
 			},
 			{ locals: { member: as } }

@@ -100,13 +100,20 @@ Publishing is idempotent when the client sends an `idempotencyKey` (ADR 0007, #4
 
 Input bounds: `GET /api/recipes` takes at most 10 `keyword` terms and 20 `ingredientIds` / 20 `baseIds` (400 `invalid_query` beyond that); `GET /api/ingredients/suggest` takes a `name` of at most 100 characters (400); JSON bodies of `POST`/`PUT /api/recipes` and `POST /api/ingredients` (and the ABV `PATCH`) are limited to 64KB (413 `too_large`).
 
+**CSRF (#66).** Two layers check the `Origin` of a cross-origin request. SvelteKit's `csrf` (on by default; `csrf.trustedOrigins` must never be `'*'`) answers 403 to a POST/PUT/PATCH/DELETE whose `Content-Type` is a form type (`application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`) from another origin, and `hono/csrf` in `createApp()` does the same for `/api/*` on its own, so the API stays protected if the first one is loosened. Both leave other `Content-Type`s alone, because a browser cannot send those cross-origin without a CORS preflight (no route grants one). That makes two things part of the contract:
+
+- **A JSON route must refuse anything that is not `application/json`** (today `validator('json')` answers 400 for `text/plain` or no `Content-Type`). A new route that parses the body without checking the `Content-Type` would make a form-type request readable.
+- **`POST /api/photos` needs exactly `application/octet-stream`** (415 otherwise), which no cross-origin form can send.
+
+`hono/csrf` also rejects a request with a form type or no `Content-Type` that carries neither `Origin` nor `Sec-Fetch-Site: same-origin`. Browsers always send `Origin` on a PUT/DELETE, so the bodiless `PUT /api/recipes/:id/like` works; code that calls `app.request` without a body, like `call()` in `src/lib/server/api/test-helpers.ts`, must add `Origin: http://localhost`.
+
 ### Social UI
 
 `/members/[username]` is the profile (tabs: Recipes, Following, Followers, and Saved for the owner only; others get 404). `/members/[username]/edit` changes Username, bio and icon; `/withdraw` is the withdrawal confirmation (no grace period, FR-058), which also deletes the stored photos. The Recipe detail page mounts `LikeButton` and `SaveButton` (`#lib/components`), with their initial state from `getReactions` in the page load (server-rendered, no flicker); Like shows a count only and is hidden on one's own Recipe, Save is for signed-in Members. The owner also gets an edit link and a confirmed delete (`?/delete`, which also removes the Likes, Saves and stored photos), and an Administrator gets the delete alone (no notice to the author, FR-074). The author's name on the detail page and the list cards links to `/members/[username]`.
 
 ## Auth
 
-Better Auth runs inside the app (ADR 0005); its endpoints are under `/api/auth/*`. Google and LINE only, no email/password. Set the `BETTER_AUTH_*`, `GOOGLE_*` and `LINE_*` variables from `.env.example`.
+Better Auth runs inside the app (ADR 0005); its endpoints are under `/api/auth/*`. Google and LINE only, no email/password. Set the `BETTER_AUTH_*`, `GOOGLE_*` and `LINE_*` variables from `.env.example`. `BETTER_AUTH_URL` is required on Vercel (production and Preview, `process.env.VERCEL`): without it Better Auth takes its base URL and trusted origin from each request's Host, and `auth()` throws on first use instead (`src/lib/server/auth/config.ts`). Locally and in tests it may stay unset; `pnpm build` never needs it.
 
 **`member` is Better Auth's user table** (`user.modelName: 'member'`), so withdrawal and Suspension run in the app's own transactions. `account`, `session` and `verification` are Better Auth's tables in the same database; all ids are uuids.
 
@@ -125,6 +132,19 @@ Better Auth runs inside the app (ADR 0005); its endpoints are under `/api/auth/*
 - Withdrawal: `withdrawMember` in `#lib/server/services/members` deletes everything in one transaction and returns the storage keys to delete: Main and extra Photos, the icon, and both files of every `photo_upload` row of the Member, used or not (the rows go with the Member). It takes its locks in the Lock order described under Photo ownership (API section), so a withdrawal and a Recipe write by the same Member cannot deadlock. The `/withdraw` action runs it first; only once it has committed does it delete the objects with `deleteObjects` (best effort, each failed key logged) and sign out, so a failed withdrawal leaves the Member signed in to retry. Reachable without a Username, like `/welcome` and `/logout`.
 
 The db tests drive Better Auth's real sign-in and callback for LINE with the token endpoint stubbed. A real Google login has been confirmed on a Preview; a real LINE login has not been tried.
+
+## Security headers (#66)
+
+`securityHeadersHandle` in `src/hooks.server.ts` (outermost, `src/lib/server/security-headers.ts`) sets on every answer that goes through `handle`, pages, the error page, `/api/*` and `/api/auth/*`: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin` and a `Permissions-Policy` that turns off camera, microphone, geolocation, payment, USB and the motion sensors (photos come from `<input type="file">`, which the camera policy does not cover).
+
+The page CSP is SvelteKit's `csp` in `vite.config.ts` (`mode: 'auto'`: a nonce on Kit's inline script, no `unsafe-inline` for scripts). It is enforced, not report-only: `default-src 'self'`, `img-src 'self' data: blob:` plus the origin of `R2_PUBLIC_BASE_URL` (added at run time by the hook, nothing is added when it is unset), `connect-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`. Answers that are not pages get `default-src 'none'; frame-ancestors 'none'`.
+
+- **`form-action`** allows `https://accounts.google.com` and `https://access.line.me` besides `'self'`: the sign-in form is a plain POST answered with 303 to the provider, and Chrome applies `form-action` to that redirect too (verified: without them the click ends on `/login` with a violation). A provider that starts redirecting through another host would be blocked the same way; the symptom is a CSP `form-action` error in the console at sign-in.
+- **`style-src-attr 'unsafe-inline'`**: SvelteKit's client sets `style` on its route announcer. `<style>` elements still need Kit's nonce.
+- `e2e/security-headers.e2e.ts` opens the main pages in Chromium and fails on any violation or console error; add a page there when it gets a new kind of resource (a font, an embed, a third-party script).
+- Not covered: files Vercel serves itself (`/_app/immutable/*`), SvelteKit's own CSRF 403 and a `redirect()` or error thrown from a hook (they bypass `handle`). None of them carries active content.
+- A Vercel Preview's comment toolbar (`vercel.live`) is not allowed by this CSP and may log violations on Previews (not checked); it does not exist in production.
+- **HSTS** is left to Vercel's default and not checked on a real deployment; look for `Strict-Transport-Security` on the Preview's response (item 8 under "What is still unchecked").
 
 ## Age Gate (FR-060..062)
 
@@ -178,6 +198,7 @@ None of these can be exercised without real credentials. Deploy a Preview with t
 5. **Backup**: run the Backup workflow by hand (its `DATABASE_URL` keeps `sslmode=require`, see "Preview"), check the object in the backup bucket, and run `pg_restore --list` on a downloaded copy. Then enable the schedule in `backup.yml` before launch, and check that the bucket has no public access or custom domain and that the `production` environment is limited to `main`.
 6. **Terms and Privacy**: fill in `src/lib/legal.ts` (operator name, contact and date are still provisional) and have both pages reviewed. The footer already links to them.
 7. **LINE deauthorization on withdrawal**: LINE's development guidelines ask the app to remove the app link (deauthorize) on the LINE side when a Member withdraws; `withdrawMember` does not do this yet. Check the current guideline and decide before launch.
+8. **Security headers and login under the CSP** (#66): on the Preview, `curl -I` a page and `/api/health` and see the headers above (and whether Vercel adds `Strict-Transport-Security`); sign in with Google and with LINE and check the console for a CSP `form-action` error; open a Recipe page and confirm its photos load from the R2 host (`img-src`). The e2e specs stub the providers and R2, so none of this has run against the real ones.
 
 ## Branches, CI and deploy
 

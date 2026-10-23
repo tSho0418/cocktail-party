@@ -18,6 +18,10 @@ async function pickedBytes(page: Page) {
 	return Buffer.from(bytes);
 }
 
+// The page's CSP (`connect-src 'self'`) refuses the specs' own fetch() of the preview's blob: URL, which the
+// app never does; e2e/security-headers.e2e.ts covers the preview under the real CSP.
+test.use({ bypassCSP: true });
+
 // Chromium only; iOS Safari / Android Chrome behaviour is listed under "Known limits" in the README.
 test.describe('PhotoPicker', () => {
 	test.beforeEach(({ browserName }) => test.skip(browserName !== 'chromium'));
