@@ -51,6 +51,8 @@ pnpm dev                    # http://localhost:5173
 
 `DATABASE_URL_TEST` names only the server and credentials (default `postgres://postgres:postgres@localhost:5432/postgres`). Each `pnpm test:db` run creates its own database `cocktail_party_test_<random>`, applies `drizzle/`, runs the tests and drops it afterwards, also when tests fail. Several worktrees can therefore share one Postgres and run `pnpm test:db` at the same time. A run killed hard (e.g. `kill -9`) can leave a `cocktail_party_test_*` database behind; drop it by hand.
 
+The query-plan check on ~2,000 generated Recipes is skipped unless `EXPLAIN_SEARCH` names a report file: `EXPLAIN_SEARCH=/tmp/explain.txt pnpm test:db search.explain`.
+
 The app database is shared, though: worktrees using the same `DATABASE_URL` see each other's data, and `pnpm db:reset` resets it for all of them. Give a worktree its own `DATABASE_URL` database name if that matters.
 
 ### Notes
