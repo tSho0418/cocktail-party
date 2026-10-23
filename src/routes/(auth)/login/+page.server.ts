@@ -2,15 +2,12 @@ import { fail, redirect } from '@sveltejs/kit';
 import { parseSetCookieHeader, toCookieOptions } from 'better-auth/cookies';
 import { BETTER_AUTH_URL } from '$app/env/private';
 import { auth, CLIENT_IP_HEADER, pruneRateLimit, type Provider } from '#lib/server/auth/index.js';
+import { PROVIDER_ORIGINS } from '#lib/server/auth/provider-origins.js';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = ({ locals }) => {
 	if (locals.member) redirect(303, '/');
 };
-
-// SvelteKit 3 refuses a redirect to another origin unless it is allowed; only the providers'
-// own authorization hosts are (the URL comes from Better Auth, never from the request).
-const PROVIDER_ORIGINS = ['https://accounts.google.com', 'https://access.line.me'];
 
 // The action goes through Better Auth's HTTP handler, not `api.signInSocial`: only the handler
 // applies the sign-in rate limit (per client address, in the database). The request is built here
@@ -50,7 +47,9 @@ const signIn =
 				});
 		// Sweeping on every request would be a write each time; 1 in 20 keeps the table small.
 		if (Math.random() < 0.05) await pruneRateLimit();
-		redirect(303, authorizationUrl, { external: PROVIDER_ORIGINS });
+		// SvelteKit 3 refuses a redirect to another origin unless it is allowed: only the providers'
+		// own authorization hosts (the URL comes from Better Auth, never from the request).
+		redirect(303, authorizationUrl, { external: [...PROVIDER_ORIGINS] });
 	};
 
 export const actions: Actions = { google: signIn('google'), line: signIn('line') };
