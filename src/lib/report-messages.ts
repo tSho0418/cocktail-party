@@ -25,7 +25,9 @@ export const ADMIN_ERRORS: Record<string, string> = {
 	self: '自分自身は停止できません。',
 	invalid_name: '名前は 1〜50 字で入力してください。',
 	invalid_abv: '度数は 0〜100 で、小数点以下1桁までにしてください(新規登録は 0 より大きい値)。',
-	base_requires_alcohol: 'ベースの材料は 0% にできません。'
+	base_requires_alcohol: 'ベースの材料は 0% にできません。',
+	in_use: 'レシピで使われている材料は削除できません。',
+	not_deletable: '酒類の材料は削除できません。'
 };
 
 export const adminErrorMessage = (code: unknown) =>

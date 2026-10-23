@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { MAX_ZERO_ABV_INGREDIENTS_PER_DAY } from '#lib/domain/ingredient-limits.js';
 import { MAX_NAME_LENGTH } from '#lib/server/services/ingredients/name.js';
 import { MAX_JSON_BYTES } from './http';
 import { call, seedMember, type TestMember } from './test-helpers';
@@ -11,8 +12,12 @@ const tag = randomUUID().slice(0, 8);
 
 beforeAll(async () => {
 	admin = await seedMember('admin_ing', { isAdministrator: true });
-	alice = await seedMember('alice_ing');
 	noName = await seedMember(null);
+});
+
+// A fresh Member each test, so registrations never run into the daily limit (#64) of a later test.
+beforeEach(async () => {
+	alice = await seedMember(`al_${randomUUID().slice(0, 8)}`);
 });
 
 describe('POST /api/ingredients', () => {
@@ -43,6 +48,19 @@ describe('POST /api/ingredients', () => {
 		});
 		expect(res.status).toBe(409);
 		expect((await res.json()).similar[0].name).toBe(`シロップ${tag}`);
+	});
+
+	it('429 once a Member has registered the daily limit, 201 for another Member and for an Administrator (#64)', async () => {
+		const carol = await seedMember('carol_ing');
+		const register = (as: TestMember, n: number) =>
+			call(as, 'POST', '/ingredients', { name: `上限${tag}${as.username}${n}`, abvPercent: 0 });
+		for (let n = 0; n < MAX_ZERO_ABV_INGREDIENTS_PER_DAY; n++)
+			expect((await register(carol, n)).status).toBe(201);
+		const res = await register(carol, 99);
+		expect(res.status).toBe(429);
+		expect((await res.json()).error).toBe('ingredient_daily_limit');
+		expect((await register(alice, 99)).status).toBe(201);
+		expect((await register(admin, 99)).status).toBe(201);
 	});
 
 	it('403 for a Member registering an alcoholic Ingredient, 201 for an Administrator (FR-013)', async () => {

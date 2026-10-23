@@ -22,7 +22,10 @@ export const statusOf = (error: string): ContentfulStatusCode =>
 			? 403
 			: error === 'duplicate'
 				? 409
-				: error === 'photo_daily_limit' || error === 'recipe_daily_limit'
+				: error === 'photo_daily_limit' ||
+					  error === 'recipe_daily_limit' ||
+					  error === 'ingredient_daily_limit' ||
+					  error === 'ingredient_total_limit'
 					? 429
 					: 422;
 

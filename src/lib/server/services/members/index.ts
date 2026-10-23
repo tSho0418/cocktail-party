@@ -1,6 +1,11 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { db } from '#lib/server/db/index.js';
 import { member, photoUpload, recipe, recipePhoto, report } from '#lib/server/db/schema.js';
+import {
+	deleteUnusedIngredients,
+	lockIngredientQuota,
+	lockRegisteredIngredients
+} from '#lib/server/services/ingredients/index.js';
 
 /** Same rule as the member_username_format CHECK (FR-053). */
 export const USERNAME_PATTERN = /^[A-Za-z0-9_]{3,20}$/;
@@ -63,6 +68,9 @@ export async function withdrawMember(actor: { id: string }): Promise<string[]> {
 		// take the Recipe row before their upload rows (updateRecipe, deleteRecipe) and the upload
 		// rows before the Member row's FOR KEY SHARE (createRecipe's INSERT); the cascade of the
 		// DELETE below would otherwise take them in another order and could deadlock with those.
+		// The Ingredient quota lock goes first (no Ingredient create is half-done), the 0% Ingredients
+		// they registered are locked between the uploads and the Member row (#64).
+		await lockIngredientQuota(tx, actor.id);
 		await tx
 			.select({ id: recipe.id })
 			.from(recipe)
@@ -75,6 +83,7 @@ export async function withdrawMember(actor: { id: string }): Promise<string[]> {
 			.where(eq(photoUpload.memberId, actor.id))
 			.orderBy(asc(photoUpload.id))
 			.for('update');
+		const registered = await lockRegisteredIngredients(tx, actor.id);
 		const [row] = await tx
 			.select({ iconKey: member.iconKey })
 			.from(member)
@@ -109,6 +118,7 @@ export async function withdrawMember(actor: { id: string }): Promise<string[]> {
 			.set({ targetState: 'member_withdrawn' })
 			.where(and(eq(report.reportedMemberId, actor.id), eq(report.targetState, 'live')));
 		await tx.delete(member).where(eq(member.id, actor.id));
+		await deleteUnusedIngredients(tx, registered); // after the cascade took their Recipes
 
 		return [
 			...new Set([
