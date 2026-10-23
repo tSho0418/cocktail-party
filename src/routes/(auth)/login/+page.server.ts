@@ -6,6 +6,10 @@ export const load: PageServerLoad = ({ locals }) => {
 	if (locals.member) redirect(303, '/');
 };
 
+// SvelteKit 3 refuses a redirect to another origin unless it is allowed; only the providers'
+// own authorization hosts are (the URL comes from Better Auth, never from the request).
+const PROVIDER_ORIGINS = ['https://accounts.google.com', 'https://access.line.me'];
+
 const signIn =
 	(provider: Provider): Actions[string] =>
 	async ({ request }) => {
@@ -19,7 +23,7 @@ const signIn =
 			headers: request.headers
 		});
 		if (!url) throw new Error(`no authorization URL for ${provider}`);
-		redirect(303, url);
+		redirect(303, url, { external: PROVIDER_ORIGINS });
 	};
 
 export const actions: Actions = { google: signIn('google'), line: signIn('line') };
