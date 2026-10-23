@@ -12,10 +12,17 @@ import {
 	LINE_CLIENT_SECRET
 } from '$app/env/private';
 import { db } from '#lib/server/db/index.js';
-import { account, member, session, verification } from '#lib/server/db/schema.js';
+import { account, member, rateLimit, session, verification } from '#lib/server/db/schema.js';
 
 export const PROVIDERS = ['google', 'line'] as const; // ADR 0005
 export type Provider = (typeof PROVIDERS)[number];
+
+/**
+ * Starting a login, per client address. Better Auth's own default for /sign-in is 3 per 10 s,
+ * which a household behind one NAT retrying after a failed consent screen could hit; this is
+ * loose for people and still bounds one address's writes. Rows live in `rate_limit`.
+ */
+export const LOGIN_RATE_LIMIT = { window: 60, max: 10 };
 
 const isSuspended = async (memberId: string) =>
 	(await db.select({ at: member.suspendedAt }).from(member).where(eq(member.id, memberId)))[0]
@@ -27,7 +34,7 @@ const createAuth = () =>
 		baseURL: BETTER_AUTH_URL,
 		database: drizzleAdapter(db, {
 			provider: 'pg',
-			schema: { member, account, session, verification }
+			schema: { member, account, session, verification, rateLimit }
 		}),
 		advanced: { database: { generateId: 'uuid' } },
 		// `member` is Better Auth's user table; README.md "Auth" has the mapping.
@@ -40,7 +47,23 @@ const createAuth = () =>
 			}
 		},
 		// Switching provider makes a new Member; never link by email (FR-051).
-		account: { accountLinking: { enabled: false }, encryptOAuthTokens: true },
+		account: {
+			accountLinking: { enabled: false },
+			encryptOAuthTokens: true,
+			// The OAuth state (with the PKCE verifier) rides in an encrypted, HttpOnly, SameSite=Lax
+			// cookie, so starting a login writes nothing to the database. Lax still sends it on the
+			// provider's top-level GET redirect back to /api/auth/callback/*.
+			storeStateStrategy: 'cookie'
+		},
+		// In-memory counters are per serverless instance and so do not limit anything; the database
+		// is shared. Off by default outside production; on everywhere so the db tests exercise it.
+		// The client address is the single-value x-forwarded-for, which Vercel sets itself (a
+		// chain of several values is not trusted and falls into one shared bucket).
+		rateLimit: {
+			enabled: true,
+			storage: 'database',
+			customRules: { '/sign-in/social': LOGIN_RATE_LIMIT }
+		},
 		socialProviders: {
 			google: { clientId: GOOGLE_CLIENT_ID ?? '', clientSecret: GOOGLE_CLIENT_SECRET ?? '' },
 			line: {

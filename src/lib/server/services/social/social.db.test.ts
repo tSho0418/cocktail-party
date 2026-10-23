@@ -265,6 +265,29 @@ describe('profile (FR-054)', () => {
 			expect(await getProfile(tx, 'alice2', null)).toMatchObject({ username: 'Alice2', bio: 'hi' });
 		}));
 
+	it('updateProfile: reserved names cannot be chosen, but a holder keeps theirs', () =>
+		isolated(async (tx) => {
+			const { alice } = await world(tx);
+			for (const name of ['admin', 'Support', 'COCKTAIL_PARTY'])
+				expect(await updateProfile(tx, alice.memberId, { username: name })).toEqual({
+					ok: false,
+					error: 'username_reserved'
+				});
+			expect(await getProfile(tx, 'alice', null)).toMatchObject({ username: 'alice' });
+
+			// A Member who held a reserved name before the rule can still edit the rest of the profile.
+			await tx.update(member).set({ username: 'Staff' }).where(eq(member.id, alice.memberId));
+			expect((await updateProfile(tx, alice.memberId, { username: 'Staff', bio: 'hi' })).ok).toBe(
+				true
+			);
+			// Changing it to another spelling of a reserved name is a new choice.
+			expect(await updateProfile(tx, alice.memberId, { username: 'staff' })).toEqual({
+				ok: false,
+				error: 'username_reserved'
+			});
+			expect((await updateProfile(tx, alice.memberId, { username: 'alice_2' })).ok).toBe(true);
+		}));
+
 	it('updateProfile: bio rules and icon replacement', () =>
 		isolated(async (tx) => {
 			const { alice } = await world(tx);

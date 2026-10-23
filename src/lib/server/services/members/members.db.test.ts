@@ -48,6 +48,14 @@ describe('setUsername (FR-052/053)', () => {
 		expect(await setUsername(m.id, 'Bob_42')).toEqual({ ok: true });
 	});
 
+	it.each(['admin', 'Admin', 'SUPPORT', 'Cocktail_Party', 'null'])(
+		'refuses the reserved name %s',
+		async (name) => {
+			const m = await newMember({ username: null });
+			expect(await setUsername(m.id, name)).toEqual({ ok: false, error: 'reserved' });
+		}
+	);
+
 	it('treats Usernames that differ only by case as taken', async () => {
 		const a = await newMember({ username: null });
 		const b = await newMember({ username: null });

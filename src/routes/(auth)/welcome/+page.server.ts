@@ -9,6 +9,7 @@ export const load: PageServerLoad = ({ locals }) => {
 
 const MESSAGES = {
 	invalid: 'Username は半角英数字とアンダースコア(_)で、3〜20文字にしてください。',
+	reserved: 'この Username は運営やサービスと紛らわしいため、使えません。',
 	taken: 'この Username は使われています。大文字と小文字は区別しません。'
 };
 
