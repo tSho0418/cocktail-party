@@ -275,6 +275,43 @@ test('an alcoholic Ingredient is registered, and editing its ABV recalculates th
 	await expect(page.getByRole('alert')).toContainText('ベース');
 });
 
+test('an unused 0% Ingredient is deleted after confirming, and one a Recipe uses cannot be (#64)', async ({
+	page,
+	browser,
+	baseURL
+}) => {
+	const unused = `E2E管理未使用${tag}`;
+	const used = `E2E管理使用中${tag}`;
+	await seedIngredient(unused, 0);
+	await seedIngredient(used, 0);
+	ingredientNames.push(unused, used);
+	const author = await signedInContext(browser, baseURL, `e2e_adm_d${++n}_${tag}`);
+	memberIds.push(author.memberId);
+	await seedRecipe(author.context, author.memberId, {
+		title: `E2E管理削除${tag}`,
+		ingredients: [
+			{ name: used, mixRatio: 1 },
+			{ name: gin, mixRatio: 1 }
+		]
+	});
+	await author.context.close();
+
+	await page.goto('/admin');
+	const row = (name: string) => page.getByRole('listitem').filter({ hasText: name });
+	await expect(row(used)).toContainText('レシピで使用中');
+	await expect(row(used).getByText('削除する')).toHaveCount(0);
+	await expect(row(gin).getByText('削除する')).toHaveCount(0); // alcoholic: never offered
+
+	// Nothing is deleted until the confirmation is submitted.
+	await row(unused).getByText('削除する').click();
+	await expect(row(unused)).toContainText('元に戻せません');
+	expect((await pool.query(`select 1 from ingredient where name = $1`, [unused])).rowCount).toBe(1);
+	await row(unused).getByRole('button', { name: '削除を確定する' }).click();
+	await expect(row(unused)).toHaveCount(0);
+	expect((await pool.query(`select 1 from ingredient where name = $1`, [unused])).rowCount).toBe(0);
+	await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
 test('a Member gets 403 on /admin, and a signed-out visitor is sent to log in (FR-077)', async ({
 	browser,
 	baseURL

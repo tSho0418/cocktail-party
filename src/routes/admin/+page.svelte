@@ -158,7 +158,7 @@
 	</section>
 
 	<section class="mt-10" aria-labelledby="ingredients-heading">
-		<h2 id="ingredients-heading" class="text-lg font-bold">酒類の材料(Ingredient)</h2>
+		<h2 id="ingredients-heading" class="text-lg font-bold">材料(Ingredient)</h2>
 		<form
 			method="POST"
 			action={act('createIngredient')}
@@ -190,12 +190,15 @@
 			<button class={button}>登録</button>
 		</form>
 		<p class="mt-1 text-xs text-gray-600">
-			度数を変えると、その材料を使うすべてのレシピの度数を再計算します。範囲を外れた修正値は破棄されます。
+			度数を変えると、その材料を使うすべてのレシピの度数を再計算します。範囲を外れた修正値は破棄されます。上のフォームは酒類の登録用です。0%
+			の材料はメンバーが登録するもので、どのレシピでも使われていないものだけ削除できます。
 		</p>
 		<ul class="mt-3 divide-y divide-gray-100 text-sm">
 			{#each data.ingredients as ing (ing.id)}
-				<li class="flex items-center gap-3 py-1">
-					<span class="flex-1">{ing.name}{ing.isBaseSpirit ? '(ベース)' : ''}</span>
+				<li class="flex flex-wrap items-start gap-x-3 gap-y-1 py-1">
+					<span class="min-w-40 flex-1 break-words"
+						>{ing.name}{ing.isBaseSpirit ? '(ベース)' : ''}</span
+					>
 					<form method="POST" action={act('updateAbv')} use:enhance class="flex items-center gap-1">
 						<input type="hidden" name="id" value={ing.id} />
 						<input
@@ -211,6 +214,31 @@
 						/>
 						<button class={button}>変更</button>
 					</form>
+					{#if ing.abvPercent === 0}
+						{#if ing.inUse}
+							<span class="w-40 shrink-0 py-1 text-xs text-gray-600">レシピで使用中</span>
+						{:else}
+							<!-- Same confirmation as the Recipe deletion: opening <details> works without JavaScript. -->
+							<details class="w-40 shrink-0">
+								<summary class="cursor-pointer text-sm text-red-700 underline">削除する</summary>
+								<form
+									method="POST"
+									action={act('deleteIngredient')}
+									use:enhance
+									class="mt-1 flex flex-col gap-1"
+								>
+									<input type="hidden" name="id" value={ing.id} />
+									<p class="text-xs">
+										「{ing.name}」を削除します。元に戻せません。
+									</p>
+									<button
+										class="self-start rounded bg-red-700 px-3 py-1 text-sm font-medium text-white"
+										>削除を確定する</button
+									>
+								</form>
+							</details>
+						{/if}
+					{/if}
 				</li>
 			{/each}
 		</ul>

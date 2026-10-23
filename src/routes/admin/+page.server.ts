@@ -4,6 +4,7 @@ import { defaultStore } from '#lib/server/api/photos.js';
 import { deleteObjects } from '#lib/server/services/images/delete-objects.js';
 import {
 	createAlcoholicIngredient,
+	deleteIngredient,
 	updateIngredientAbv
 } from '#lib/server/services/ingredients/index.js';
 import { listIngredientsWithAbv } from '#lib/server/services/ingredients/list.js';
@@ -96,6 +97,12 @@ export const actions: Actions = {
 		const actor = requireAdmin(locals);
 		const data = await request.formData();
 		const r = await updateIngredientAbv(actor, text(data, 'id'), abvOf(text(data, 'abvPercent')));
+		if (!r.ok) return fail(400, { error: adminErrorMessage(r.error) });
+	},
+	// #64: unused 0% Ingredients only; the service refuses the rest.
+	deleteIngredient: async ({ locals, request }) => {
+		const actor = requireAdmin(locals);
+		const r = await deleteIngredient(actor, text(await request.formData(), 'id'));
 		if (!r.ok) return fail(400, { error: adminErrorMessage(r.error) });
 	}
 };

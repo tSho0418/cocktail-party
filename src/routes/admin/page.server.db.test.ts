@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { db } from '#lib/server/db/index.js';
-import { member, recipe, report } from '#lib/server/db/schema.js';
+import { ingredient, member, recipe, recipeIngredient, report } from '#lib/server/db/schema.js';
 import { actions, load } from './+page.server';
 
 const tag = randomUUID().slice(0, 8);
@@ -62,7 +62,8 @@ const everyAction: [ActionName, Record<string, string>][] = [
 	['suspend', { username: 'nobody' }],
 	['unsuspend', { username: 'nobody' }],
 	['createIngredient', { name: 'x', abvPercent: '40' }],
-	['updateAbv', { id: randomUUID(), abvPercent: '40' }]
+	['updateAbv', { id: randomUUID(), abvPercent: '40' }],
+	['deleteIngredient', { id: randomUUID() }]
 ];
 
 describe('/admin authorization (FR-077)', () => {
@@ -168,5 +169,50 @@ describe('/admin as an Administrator', () => {
 		expect(await act('updateAbv', admin, { id: 'not-a-uuid', abvPercent: '40' })).toMatchObject({
 			status: 400
 		});
+	});
+});
+
+describe('/admin Ingredient deletion (#64)', () => {
+	const exists = async (id: string) =>
+		(await db.select().from(ingredient).where(eq(ingredient.id, id))).length === 1;
+	const zero = async (name: string) =>
+		(
+			await db
+				.insert(ingredient)
+				.values({ name: `${name}${tag}`, abvPercent: 0 })
+				.returning()
+		)[0].id;
+
+	it('deletes an unused 0% Ingredient only for an Administrator', async () => {
+		const id = await zero('管理削除');
+		const e = await act('deleteIngredient', plain, { id }).catch((x: unknown) => x);
+		expect(isHttpError(e) && e.status).toBe(403);
+		expect(await exists(id)).toBe(true);
+
+		expect(await act('deleteIngredient', admin, { id })).toBeUndefined();
+		expect(await exists(id)).toBe(false);
+	});
+
+	it('shows an error and keeps an Ingredient that a Recipe uses', async () => {
+		const id = await zero('管理使用中');
+		await db
+			.insert(recipeIngredient)
+			.values({ recipeId, ingredientId: id, mixRatio: 1, position: 1 });
+		const r = (await act('deleteIngredient', admin, { id })) as {
+			status: number;
+			data: { error: string };
+		};
+		expect(r.status).toBe(400);
+		expect(r.data.error).toContain('使われている');
+		expect(await exists(id)).toBe(true);
+		const listed = (
+			(await loadAs(admin)) as { ingredients: { id: string; inUse: boolean }[] }
+		).ingredients.find((i) => i.id === id);
+		expect(listed?.inUse).toBe(true);
+	});
+
+	it('answers an unknown or malformed id with an error, not a 500', async () => {
+		for (const id of [randomUUID(), 'not-a-uuid', ''])
+			expect(await act('deleteIngredient', admin, { id })).toMatchObject({ status: 400 });
 	});
 });

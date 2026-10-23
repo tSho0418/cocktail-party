@@ -1,5 +1,9 @@
 // Pure state and rules behind the Recipe post/edit form (FR-003..007, FR-020..024). No I/O, no framework imports.
 import {
+	MAX_ZERO_ABV_INGREDIENTS_PER_DAY,
+	MAX_ZERO_ABV_INGREDIENTS_TOTAL
+} from '#lib/domain/ingredient-limits.js';
+import {
 	MAX_INGREDIENTS,
 	hasAlcohol,
 	recomputeDerived,
@@ -230,6 +234,8 @@ export const API_ERRORS: Record<string, string> = {
 	duplicate_ingredient: '同じ材料は1回だけ入れられます。',
 	mix_ratio_invalid: '混ぜる割合は 0.1〜99.9(小数点以下1桁まで)にしてください。',
 	unknown_ingredient: '存在しない材料が含まれています。選び直してください。',
+	ingredient_daily_limit: `材料の登録は 1 日 ${MAX_ZERO_ABV_INGREDIENTS_PER_DAY} 件までです。しばらくしてから、もう一度お試しください。`,
+	ingredient_total_limit: `登録できる材料は、1 人 ${MAX_ZERO_ABV_INGREDIENTS_TOTAL} 件までです。既にある材料から選んでください。`,
 	override_not_allowed: '酒類を含まないレシピの度数は修正できません。',
 	override_invalid: '修正値が範囲外です。0% を超え、材料の最高度数以下にしてください。',
 	unsupported_media_type: 'この形式の写真は送れません。',

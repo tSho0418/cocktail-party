@@ -22,7 +22,9 @@ export const statusOf = (error: string): ContentfulStatusCode =>
 			? 403
 			: error === 'duplicate'
 				? 409
-				: 422;
+				: error === 'ingredient_daily_limit' || error === 'ingredient_total_limit'
+					? 429
+					: 422;
 
 export const invalidRequest = (c: Context<Env>) =>
 	c.json({ error: 'invalid_request' as const }, 400);
