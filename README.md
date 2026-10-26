@@ -144,7 +144,7 @@ Better Auth runs inside the app (ADR 0005); its endpoints are under `/api/auth/*
   - **What Google revocation achieves in practice**: because the sliding session keeps a Member signed in without a new OAuth login, most Google Members withdraw with an expired access token and nothing is sent. The revocation only takes effect inside about an hour of the last Google login. Revoking the grant for everyone would need `accessType: 'offline'` (and probably `prompt: 'consent'`) so that a refresh token is stored (then revoking it ends the grant); that changes what is stored and what the consent screen asks, so it was not done.
   - **If `BETTER_AUTH_SECRET` is rotated**, give Better Auth `secrets: [{ version, value }, …]` (or `BETTER_AUTH_SECRETS=2:new,1:old`; the first entry encrypts, the rest only decrypt; `InitOptions.secrets` in `@better-auth/core`) and keep the old key there: with only the new `secret`, the stored tokens cannot be decrypted, and those Members can be neither deauthorized nor revoked (logged as `decrypt-or-refresh-failed`). Not exercised here: the option name comes from the type definitions, no rotation was run.
 
-The db tests drive Better Auth's real sign-in and callback for LINE with the token endpoint stubbed. A real Google login has been confirmed on a Preview; a real LINE login has not been tried.
+The db tests drive Better Auth's real sign-in and callback for LINE with the token endpoint stubbed. A real Google login has been confirmed on a Preview; no real LINE login has succeeded yet (the one tried on the Preview failed, see "Preview" > LINE; the `openid`-only scope has not been retried).
 
 ## Security headers (#66)
 
