@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { db } from '#lib/server/db/index.js';
 import { member, photoUpload, recipe, recipePhoto, report } from '#lib/server/db/schema.js';
+import { photoFiles } from '#lib/server/services/recipes/index.js';
 import {
 	deleteUnusedIngredients,
 	lockIngredientQuota,
@@ -58,9 +59,9 @@ export async function setUsername(memberId: string, username: string): Promise<S
  * Withdrawal (FR-058, FR-078) in one transaction. Deleting the Member cascades to its sessions,
  * account, Recipes, Photos, uploads, Likes, Saves and Follows; Reports it received or sent are
  * kept with the links nulled by their FKs. Returns the object-storage keys the caller must
- * delete afterwards (Main Photos, extra Photos, icon, and both files of every upload, including
- * ones no Recipe uses: their `photo_upload` rows go with the Member, so this is the last time
- * the keys are known).
+ * delete afterwards (Main Photos, extra Photos and icon, each as both of its files, and both files
+ * of every upload, including ones no Recipe uses: their `photo_upload` rows go with the Member,
+ * so this is the last time the keys are known).
  */
 export async function withdrawMember(actor: { id: string }): Promise<string[]> {
 	return db.transaction(async (tx) => {
@@ -122,8 +123,9 @@ export async function withdrawMember(actor: { id: string }): Promise<string[]> {
 
 		return [
 			...new Set([
-				...[...recipes, ...extras].map((r) => r.key),
-				...(row.iconKey ? [row.iconKey] : []),
+				// A key with no upload row (older than ADR 0006) still leaves its other file behind (#48).
+				...[...recipes, ...extras].flatMap((r) => photoFiles(r.key)),
+				...(row.iconKey ? photoFiles(row.iconKey) : []),
 				...uploads.flatMap((u) => [`${u.kind}/${u.id}/list.webp`, `${u.kind}/${u.id}/detail.webp`])
 			])
 		];

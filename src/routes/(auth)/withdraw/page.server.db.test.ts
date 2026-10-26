@@ -3,10 +3,11 @@ import { isRedirect, type RequestEvent } from '@sveltejs/kit';
 import { eq, sql } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveMember as resolveInHandle } from '#lib/server/auth/index.js';
-import { cookiesOf, lineLogin, ORIGIN } from '#lib/server/auth/test/line-login.js';
+import { deauthorizeLine, LineDeauthorizeError } from '#lib/server/auth/line-deauthorize.js';
+import { cookiesOf, ORIGIN, socialLogin } from '#lib/server/auth/test/line-login.js';
 import { inRequest } from '#lib/server/auth/test/via-handle.js';
 import { db } from '#lib/server/db/index.js';
-import { member, photoUpload, recipe, session } from '#lib/server/db/schema.js';
+import { account, member, photoUpload, recipe, session } from '#lib/server/db/schema.js';
 import { memoryImageStore, type ImageStore } from '#lib/server/services/images/index.js';
 import { actions } from './+page.server';
 
@@ -17,16 +18,26 @@ vi.mock(import('#lib/server/api/photos.js'), async (importOriginal) => ({
 	defaultStore: () => storage.current!
 }));
 
-afterEach(() => vi.unstubAllGlobals());
+// LINE's deauthorize call needs real credentials; the tests record what the action sends it.
+vi.mock(import('#lib/server/auth/line-deauthorize.js'), async (importOriginal) => ({
+	...(await importOriginal()),
+	deauthorizeLine: vi.fn(async () => {})
+}));
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+	vi.mocked(deauthorizeLine).mockReset();
+});
 
 // A request whose session is gone makes Better Auth clear the cookie, which needs a request event.
 const resolveMember = (headers: Headers) =>
 	inRequest({ cookies: { set() {} } } as unknown as RequestEvent, () => resolveInHandle(headers));
 
 /** A signed-in Member who has not chosen a Username yet, with a Recipe, an unused upload and an icon. */
-async function signedInMember() {
+async function signedInMember(provider: 'line' | 'google' = 'line') {
 	const store = memoryImageStore();
-	const cookie = cookiesOf(await lineLogin({ sub: `U-withdraw-${randomUUID()}` }));
+	const sub = `U-withdraw-${randomUUID()}`;
+	const cookie = cookiesOf(await socialLogin(provider, { sub, email: `${sub}@example.com` }));
 	const headers = new Headers({ cookie });
 	const signedIn = (await resolveMember(headers))!;
 	const upload = async (kind: 'recipe' | 'member') => {
@@ -144,6 +155,109 @@ describe('/withdraw action (FR-058)', () => {
 			expect(store.objects.size).toBe(6);
 		} finally {
 			await db.execute(sql`drop table withdraw_blocker`);
+		}
+	});
+});
+
+describe('/withdraw action and LINE deauthorization', () => {
+	const memberRows = (id: string) => db.select().from(member).where(eq(member.id, id));
+	// Hex of even length is taken for ciphertext (Better Auth's check) and fails to decrypt.
+	const CORRUPT_TOKEN = 'ab'.repeat(40);
+
+	it('deauthorizes a LINE Member once, with their access token, after the deletion has committed', async () => {
+		const { signedIn, cookie } = await signedInMember('line');
+		const rowsWhenCalled: unknown[][] = [];
+		vi.mocked(deauthorizeLine).mockImplementation(async () => {
+			rowsWhenCalled.push(await memberRows(signedIn.id));
+		});
+
+		const { thrown } = await withdraw(signedIn, cookie);
+
+		expect(redirectOf(thrown)).toEqual([303, '/']);
+		expect(deauthorizeLine).toHaveBeenCalledTimes(1);
+		expect(deauthorizeLine).toHaveBeenCalledWith('at'); // the access token the stubbed LINE issued
+		expect(rowsWhenCalled).toEqual([[]]);
+	});
+
+	it('does not call LINE for a Google Member', async () => {
+		const { signedIn, cookie } = await signedInMember('google');
+
+		const { thrown } = await withdraw(signedIn, cookie);
+
+		expect(redirectOf(thrown)).toEqual([303, '/']);
+		expect(await memberRows(signedIn.id)).toEqual([]);
+		expect(deauthorizeLine).not.toHaveBeenCalled();
+	});
+
+	it('does not call LINE when the withdrawal itself fails', async () => {
+		const { signedIn, cookie } = await signedInMember('line');
+		await db.execute(sql`create table withdraw_blocker (member_id uuid references member(id))`);
+		try {
+			await db.execute(sql`insert into withdraw_blocker values (${signedIn.id})`);
+
+			const { thrown } = await withdraw(signedIn, cookie);
+
+			expect(thrown).toBeInstanceOf(Error);
+			expect(await memberRows(signedIn.id)).toHaveLength(1);
+			expect(deauthorizeLine).not.toHaveBeenCalled();
+		} finally {
+			await db.execute(sql`drop table withdraw_blocker`);
+		}
+	});
+
+	it('still withdraws and signs out when LINE refuses, logging the status but no token', async () => {
+		const { signedIn, cookie, headers } = await signedInMember('line');
+		vi.mocked(deauthorizeLine).mockRejectedValue(new LineDeauthorizeError('deauthorize', 400));
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const { thrown, cookieWrites } = await withdraw(signedIn, cookie);
+
+			expect(redirectOf(thrown)).toEqual([303, '/']);
+			expect(await memberRows(signedIn.id)).toEqual([]);
+			expect(sessionCookieCleared(cookieWrites)).toBe(true);
+			expect(await resolveMember(headers)).toBeNull();
+			expect(log.mock.calls).toEqual([
+				['LINE deauthorization failed', 'LINE deauthorize answered 400']
+			]);
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	it('logs only the kind of an unexpected failure, which can carry the token or a connection string', async () => {
+		const { signedIn, cookie } = await signedInMember('line');
+		vi.mocked(deauthorizeLine).mockRejectedValue(
+			new TypeError('fetch failed: postgres://user:secret@host/db token=at')
+		);
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const { thrown } = await withdraw(signedIn, cookie);
+
+			expect(redirectOf(thrown)).toEqual([303, '/']);
+			expect(await memberRows(signedIn.id)).toEqual([]);
+			expect(log.mock.calls).toEqual([['LINE deauthorization failed', 'TypeError']]);
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	it('withdraws without calling LINE when the stored token cannot be read, logging no token', async () => {
+		const { signedIn, cookie } = await signedInMember('line');
+		await db
+			.update(account)
+			.set({ accessToken: CORRUPT_TOKEN })
+			.where(eq(account.userId, signedIn.id));
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const { thrown } = await withdraw(signedIn, cookie);
+
+			expect(redirectOf(thrown)).toEqual([303, '/']);
+			expect(await memberRows(signedIn.id)).toEqual([]);
+			expect(deauthorizeLine).not.toHaveBeenCalled();
+			expect(JSON.stringify(log.mock.calls)).not.toContain(CORRUPT_TOKEN);
+			expect(log).toHaveBeenCalledTimes(1);
+		} finally {
+			log.mockRestore();
 		}
 	});
 });

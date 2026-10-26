@@ -17,6 +17,10 @@
 		<li>あなたが付けたいいねと保存したレシピ</li>
 		<li>フォローとフォロワーの関係</li>
 	</ul>
+	<p class="mt-4 text-sm text-gray-800">
+		LINE でログインしている場合は、退会すると LY
+		Corporation(LINE)に退会したことが通知され、本サービスと LINE アプリの連携が解除されます。
+	</p>
 	<p class="mt-4 text-sm font-bold text-red-700">
 		退会はすぐに実行され、取り消すことも、元に戻すこともできません。
 	</p>
