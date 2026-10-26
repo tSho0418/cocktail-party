@@ -76,6 +76,13 @@ describe('login actions', () => {
 		expect(await db.select().from(verification)).toHaveLength(0);
 	});
 
+	// The LINE channel has no approval to read the email, and the app stores none (FR-050): asking
+	// for it would only risk LINE refusing the login.
+	it('asks LINE for openid and profile only, not email', async () => {
+		const { redirect } = redirectOf(await startLogin('line', fromIp('203.0.113.17')));
+		expect(new URL(redirect).searchParams.get('scope')?.split(' ')).toEqual(['openid', 'profile']);
+	});
+
 	// The state now travels in a cookie, so the round trip must still work for each provider.
 	it.each([
 		['google', { sub: 'g-roundtrip', email: 'g@example.com', email_verified: true }],

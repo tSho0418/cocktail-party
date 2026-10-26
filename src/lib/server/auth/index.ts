@@ -91,6 +91,9 @@ const createAuth = () =>
 			line: {
 				clientId: LINE_CLIENT_ID ?? '',
 				clientSecret: LINE_CLIENT_SECRET ?? '',
+				// openid + profile only: no email scope, which a channel needs LINE's approval for.
+				disableDefaultScope: true,
+				scope: ['openid', 'profile'],
 				// Better Auth refuses a login without an email; LINE may not send one (FR-050). The
 				// placeholder only satisfies that check: the user.create hook below stores no email.
 				mapProfileToUser: (profile) => ({ email: profile.email ?? `${profile.sub}@line.invalid` })
