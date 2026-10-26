@@ -18,6 +18,16 @@ const filesOf = (kind: OwnerKind, id: string) => [
 	`${kind}/${id}/detail.webp`
 ];
 
+/**
+ * Both files of the photo a stored key names (`list` and `detail` are written together), or the key
+ * alone when it has no such shape. A key with no `photo_upload` row (older than ADR 0006) is the
+ * only record of its pair.
+ */
+export function photoFiles(key: string) {
+	const m = PHOTO_KEY.exec(key);
+	return m ? filesOf(m[1] as OwnerKind, m[2]) : [key];
+}
+
 /** Records who uploaded a photo; POST /api/photos calls it once the derivatives are stored. */
 export async function recordPhotoUpload(db: Db, memberId: string, kind: OwnerKind, id: string) {
 	await db.insert(photoUpload).values({ id, memberId, kind });

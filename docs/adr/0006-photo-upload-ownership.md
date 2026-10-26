@@ -27,3 +27,4 @@ Member アイコンも同じ検査をする。`updateProfile` は、`member/<uui
 - このマイグレーションより前に作られた Recipe の鍵は `photo_upload` に無い。`storePhoto` の形(`recipe/<uuid>/{list,detail}.webp`)の鍵なら、編集で今の鍵を送り直す限りそのまま使える。形が違う旧形式の鍵は、編集で `photo_key_invalid` として拒否される(公開前なのでバックフィルせず、該当するデータも無い見込み)。新しく足す鍵は検査される。
 - Recipe の書き込みが、使う写真ごとに行ロックを取る。同じ写真を触る書き込みは直列になるが、1 Recipe の写真は最大4枚で、写真は Member 単位なので競合はまれ。
 - 一つのアップロードを同じ Member の複数の Recipe に使える。最後の1件が参照しなくなった時点で解放される。
+- 退会は、Recipe の写真やアイコンの鍵が `<kind>/<uuid>/{list,detail}.webp` の形なら、`photo_upload` に行が無くても list と detail の両方を返して削除する(#48)。形が違う鍵は、そのまま1本だけ返す。
