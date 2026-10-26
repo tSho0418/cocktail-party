@@ -29,6 +29,20 @@
       "when": 1792761082515,
       "tag": "0003_recipe_idempotency_key",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792763658788,
+      "tag": "0004_curly_true_believers",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792766054531,
+      "tag": "0005_sloppy_fabian_cortez",
+      "breakpoints": true
     }
   ]
 }

@@ -1,17 +1,49 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { db } from '#lib/server/db/index.js';
 import { member, photoUpload, recipe, recipePhoto, report } from '#lib/server/db/schema.js';
+import {
+	deleteUnusedIngredients,
+	lockIngredientQuota,
+	lockRegisteredIngredients
+} from '#lib/server/services/ingredients/index.js';
 
 /** Same rule as the member_username_format CHECK (FR-053). */
 export const USERNAME_PATTERN = /^[A-Za-z0-9_]{3,20}$/;
 
+/**
+ * Names that read as the operators or the service (impersonation of a public name, not a
+ * privilege). Compared in lower case, like the case-insensitive uniqueness (FR-053). Members
+ * who already hold one keep it; it only cannot be chosen again.
+ */
+const RESERVED_USERNAMES = new Set([
+	'admin',
+	'administrator',
+	'support',
+	'staff',
+	'moderator',
+	'mod',
+	'official',
+	'system',
+	'root',
+	'null',
+	'undefined',
+	'cocktail_party',
+	'cocktailparty',
+	'cocktail_party_official'
+]);
+
+export const isReservedUsername = (username: string) =>
+	RESERVED_USERNAMES.has(username.toLowerCase());
+
 const UNIQUE_VIOLATION = '23505';
 
-export type SetUsernameResult = { ok: true } | { ok: false; error: 'invalid' | 'taken' };
+export type SetUsernameResult =
+	{ ok: true } | { ok: false; error: 'invalid' | 'reserved' | 'taken' };
 
 /** Sets or changes the Username (FR-052/053). Uniqueness ignores case, via the DB index. */
 export async function setUsername(memberId: string, username: string): Promise<SetUsernameResult> {
 	if (!USERNAME_PATTERN.test(username)) return { ok: false, error: 'invalid' };
+	if (isReservedUsername(username)) return { ok: false, error: 'reserved' };
 	try {
 		await db.update(member).set({ username }).where(eq(member.id, memberId));
 		return { ok: true };
@@ -36,6 +68,9 @@ export async function withdrawMember(actor: { id: string }): Promise<string[]> {
 		// take the Recipe row before their upload rows (updateRecipe, deleteRecipe) and the upload
 		// rows before the Member row's FOR KEY SHARE (createRecipe's INSERT); the cascade of the
 		// DELETE below would otherwise take them in another order and could deadlock with those.
+		// The Ingredient quota lock goes first (no Ingredient create is half-done), the 0% Ingredients
+		// they registered are locked between the uploads and the Member row (#64).
+		await lockIngredientQuota(tx, actor.id);
 		await tx
 			.select({ id: recipe.id })
 			.from(recipe)
@@ -48,6 +83,7 @@ export async function withdrawMember(actor: { id: string }): Promise<string[]> {
 			.where(eq(photoUpload.memberId, actor.id))
 			.orderBy(asc(photoUpload.id))
 			.for('update');
+		const registered = await lockRegisteredIngredients(tx, actor.id);
 		const [row] = await tx
 			.select({ iconKey: member.iconKey })
 			.from(member)
@@ -82,6 +118,7 @@ export async function withdrawMember(actor: { id: string }): Promise<string[]> {
 			.set({ targetState: 'member_withdrawn' })
 			.where(and(eq(report.reportedMemberId, actor.id), eq(report.targetState, 'live')));
 		await tx.delete(member).where(eq(member.id, actor.id));
+		await deleteUnusedIngredients(tx, registered); // after the cascade took their Recipes
 
 		return [
 			...new Set([

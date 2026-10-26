@@ -128,6 +128,59 @@ test('a failed save keeps the form, tells the Member, and the retry publishes on
 	expect(await recipesTitled(title)).toHaveLength(1);
 });
 
+test('a photo upload refused for the daily limit says why and the Member can pick again (#63)', async ({
+	page
+}) => {
+	let attempts = 0;
+	await page.route('**/api/photos?kind=recipe', async (route) =>
+		attempts++ === 0
+			? route.fulfill({ status: 429, json: { error: 'photo_daily_limit' } })
+			: route.fulfill({ json: { keys: { list: await seedPhotoUpload(memberId) } } })
+	);
+	const title = `E2E写真上限${tag}`;
+	await page.goto('/recipes/new');
+	await page.getByLabel('タイトル').fill(title);
+	const picker = page.getByLabel('完成写真を選ぶ');
+	await pickPhoto(page, '完成写真を選ぶ');
+	await expect(page.getByRole('alert').filter({ hasText: '上限' })).toBeVisible();
+	await expect(picker).toBeEnabled(); // never stuck busy after the refusal
+	await expect(page.getByRole('button', { name: '投稿する' })).toBeEnabled();
+
+	await pickPhoto(page, '完成写真を選ぶ');
+	await expect(page.getByRole('img', { name: `${title} の完成写真` })).toBeVisible();
+	await expect(page.getByRole('alert').filter({ hasText: '上限' })).toHaveCount(0);
+});
+
+test('a Recipe refused for the daily limit says why, keeps the form, and the button works again (#63)', async ({
+	page
+}) => {
+	const title = `E2E上限${tag}`;
+	await stubUploads(page);
+	await page.goto('/recipes/new');
+	await page.getByLabel('タイトル').fill(title);
+	await pickPhoto(page, '完成写真を選ぶ');
+	await addIngredient(page, gin, '2');
+	await page.getByRole('textbox', { name: 'ステップ 1' }).fill('注ぐ');
+
+	let attempts = 0;
+	await page.route('**/api/recipes', async (route) => {
+		if (route.request().method() !== 'POST') return route.continue();
+		if (attempts++ === 0)
+			return route.fulfill({ status: 429, json: { error: 'recipe_daily_limit' } });
+		return route.continue();
+	});
+	const submit = page.getByRole('button', { name: '投稿する' });
+	await submit.click();
+	await expect(page.getByRole('alert').filter({ hasText: '上限' })).toBeFocused();
+	await expect(submit).toBeEnabled();
+	await expect(page.getByLabel('タイトル')).toHaveValue(title);
+	expect(await recipesTitled(title)).toHaveLength(0);
+
+	await submit.click();
+	await expect(page).toHaveURL(/\/recipes\/[0-9a-f-]{36}$/);
+	expect(await recipesTitled(title)).toHaveLength(1);
+});
+
 test('a response lost after the server saved does not publish twice when the Member resends (#46)', async ({
 	page
 }) => {

@@ -1,5 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import type { ActionData } from './$types';
+
+	let { form }: { form: ActionData } = $props();
 </script>
 
 <svelte:head><title>ログイン | Cocktail Party</title></svelte:head>
@@ -7,7 +10,11 @@
 <main class="mx-auto max-w-sm p-8">
 	<h1 class="text-2xl font-bold">ログイン</h1>
 
-	{#if page.url.searchParams.has('error')}
+	{#if form?.error === 'rate_limited'}
+		<p role="alert" class="mt-4 rounded bg-red-50 p-3 text-sm text-red-700">
+			短時間にログインを試みた回数が多すぎます。しばらく待ってから、もう一度お試しください。
+		</p>
+	{:else if page.url.searchParams.has('error')}
 		<p role="alert" class="mt-4 rounded bg-red-50 p-3 text-sm text-red-700">
 			ログインできませんでした。時間をおいて、もう一度お試しください。
 		</p>

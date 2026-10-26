@@ -28,14 +28,20 @@ const detail = async (id: string) =>
 	>[0])) as unknown as DetailData;
 
 async function make(actor: typeof owner, title: string, ids = [gin, tonic], extra = {}) {
-	const r = await createRecipe(db, actor, {
-		title,
-		description: `${tag} の説明`,
-		mainPhotoKey: await upload(db, actor),
-		ingredients: ids.map((ingredientId) => ({ ingredientId, mixRatio: 3 })),
-		steps: ['注ぐ', '混ぜる'],
-		...extra
-	});
+	const r = await createRecipe(
+		db,
+		actor,
+		{
+			title,
+			description: `${tag} の説明`,
+			mainPhotoKey: await upload(db, actor),
+			ingredients: ids.map((ingredientId) => ({ ingredientId, mixRatio: 3 })),
+			steps: ['注ぐ', '混ぜる'],
+			...extra
+		},
+		undefined,
+		{ dailyLimit: null } // the daily limit is tested in api/quota.db.test.ts
+	);
 	if (!r.ok) throw new Error(r.error);
 	return r.value.id;
 }

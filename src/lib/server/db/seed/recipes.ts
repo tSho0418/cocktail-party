@@ -374,10 +374,13 @@ export async function seedRecipes(pool: pg.Pool, store: ImageStore) {
 		const photo = await storePhoto(store, await demoPhoto(input.title), 'recipe');
 		if (!photo.ok) throw new Error(`photo for ${input.title}: ${photo.error}`);
 		await recordPhotoUpload(db, demo.id, 'recipe', photo.id);
-		const created = await createRecipe(db, { memberId: demo.id, isAdministrator: false }, {
-			...input,
-			mainPhotoKey: photo.keys.list
-		} satisfies RecipeInput);
+		const created = await createRecipe(
+			db,
+			{ memberId: demo.id, isAdministrator: false },
+			{ ...input, mainPhotoKey: photo.keys.list } satisfies RecipeInput,
+			undefined,
+			{ dailyLimit: null } // the demo Member publishes all of them at once
+		);
 		if (!created.ok) {
 			await db.delete(photoUpload).where(eq(photoUpload.id, photo.id));
 			await Promise.allSettled([store.delete(photo.keys.list), store.delete(photo.keys.detail)]);

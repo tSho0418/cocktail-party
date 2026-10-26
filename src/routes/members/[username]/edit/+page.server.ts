@@ -12,6 +12,7 @@ import type { Actions, PageServerLoad } from './$types';
 
 const MESSAGES: Record<UpdateProfileError, string> = {
 	username_invalid: 'Username は半角英数字とアンダースコア(_)で、3〜20文字にしてください。',
+	username_reserved: 'この Username は運営やサービスと紛らわしいため、使えません。',
 	username_taken: 'この Username は使われています。大文字と小文字は区別しません。',
 	bio_too_long: '自己紹介は200文字までです。',
 	icon_key_invalid: 'アイコン画像を設定できませんでした。もう一度選んでください。'

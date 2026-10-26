@@ -4,9 +4,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { holdingTransaction, waitForLockWaiters } from '#lib/server/db/test/concurrency.js';
 import { db } from '#lib/server/db/index.js';
 import { ingredient, member, photoUpload, recipe } from '#lib/server/db/schema.js';
-import { updateRecipe } from '../recipes/recipes';
-import { input, make, seedMember } from '../recipes/test-fixtures';
-import { updateIngredientAbv } from '.';
+import { createRecipe, updateRecipe } from '../recipes/recipes';
+import { input, make, own, seedMember } from '../recipes/test-fixtures';
+import { deleteIngredient, updateIngredientAbv } from '.';
 
 // Real connections and committed rows, as in social/races.db.test.ts: the point is how a Recipe
 // edit and an ABV edit (FR-015) interleave, which rolled-back `isolated` transactions cannot show.
@@ -110,6 +110,54 @@ describe('a Recipe edit racing an Ingredient ABV edit (#45)', () => {
 		} finally {
 			adding.commit();
 			await adding.done;
+		}
+	});
+});
+
+// A Recipe write share-locks the Ingredients it uses and the deletion locks the row FOR UPDATE
+// before it looks for users, so whichever comes second waits for the first and sees its result:
+// the foreign key (restrict) is only the last line of defence, never what the Administrator hits.
+describe('an Ingredient deletion racing a Recipe write (#64)', () => {
+	it('is refused as in_use when a Recipe that uses the Ingredient is being created', async () => {
+		const { owner, admin, newIngredient } = await world();
+		const syrup = await newIngredient(0);
+		const creating = holdingTransaction((tx) => make(tx, owner, input('競合', [[syrup, 1]])));
+		try {
+			const id = await creating.result;
+			const deleting = deleteIngredient(admin, syrup);
+			await waitForLockWaiters(1);
+			creating.commit();
+			await creating.done;
+
+			expect(await outcome(deleting)).toBe('failed: in_use');
+			expect(await db.select().from(ingredient).where(eq(ingredient.id, syrup))).toHaveLength(1);
+			expect(await load(id)).toMatchObject({ title: '競合' });
+		} finally {
+			creating.commit();
+			await creating.done;
+		}
+	});
+
+	it('makes the Recipe fail with unknown_ingredient when the deletion got there first', async () => {
+		const { owner, admin, newIngredient } = await world();
+		const syrup = await newIngredient(0);
+		const recipeInput = await own(db, owner, input('競合', [[syrup, 1]]));
+		const deleting = holdingTransaction((tx) => deleteIngredient(admin, syrup, tx));
+		try {
+			expect(await deleting.result).toMatchObject({ ok: true });
+			const creating = createRecipe(db, owner, recipeInput);
+			await waitForLockWaiters(1);
+			deleting.commit();
+			await deleting.done;
+
+			expect(await outcome(creating)).toBe('failed: unknown_ingredient');
+			expect(await db.select().from(ingredient).where(eq(ingredient.id, syrup))).toHaveLength(0);
+			expect(
+				await db.select().from(recipe).where(eq(recipe.memberId, owner.memberId))
+			).toHaveLength(0);
+		} finally {
+			deleting.commit();
+			await deleting.done;
 		}
 	});
 });

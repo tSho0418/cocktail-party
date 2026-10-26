@@ -11,7 +11,7 @@ name: Backup
 #                                 separate from the Photo bucket: the dumps hold every Member's data.
 # Set the `production` environment's Deployment branches to `main` only, so no other branch can read
 # these secrets.
-# The `session` and `verification` tables are dumped without their rows (login records, OAuth state).
+# The `session`, `verification` and `rate_limit` tables are dumped without their rows (login records, OAuth state, client IP addresses).
 # Disabled for now (CD postponed, like deploy.yml): runs only when started by hand from the Actions tab.
 # To enable the daily run, add under `on:`:
 #   schedule:
@@ -51,7 +51,8 @@ jobs:
           echo "NAME=$NAME" >> "$GITHUB_ENV"
           # Custom format: compressed, and restorable selectively with pg_restore.
           /usr/lib/postgresql/17/bin/pg_dump --format=custom --no-owner --no-privileges \
-            --exclude-table-data=session --exclude-table-data=verification --file "$NAME" "$DATABASE_URL"
+            --exclude-table-data=session --exclude-table-data=verification \
+            --exclude-table-data=rate_limit --file "$NAME" "$DATABASE_URL"
           # A dump pg_restore cannot read must fail the run, not become the newest "backup".
           /usr/lib/postgresql/17/bin/pg_restore --list "$NAME" > /dev/null
           ls -l "$NAME"

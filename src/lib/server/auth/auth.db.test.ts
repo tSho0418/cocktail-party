@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { db } from '#lib/server/db/index.js';
-import { account, ingredient, member, recipe, session } from '#lib/server/db/schema.js';
+import { account, ingredient, member, rateLimit, recipe, session } from '#lib/server/db/schema.js';
 import { recordPhotoUpload } from '#lib/server/services/recipes/index.js';
 import { resolveMember } from './index';
 import { cookiesOf, lineLogin, memberOfAccount, ORIGIN } from './test/line-login';
@@ -74,9 +74,8 @@ describe('Suspension (FR-075)', () => {
 		await db.update(member).set({ suspendedAt: new Date() }).where(eq(member.id, m.id));
 		expect((await viaHandle('/api/me', cookie)).status).toBe(401);
 		expect(await db.select().from(session).where(eq(session.userId, m.id))).toEqual([]);
-		// Better Auth's own endpoint behind the same handle cannot hand the session back either.
-		const got = await viaHandle('/api/auth/get-session', cookie);
-		expect(await got.json()).toBeNull();
+		// Better Auth's own session endpoint is not reachable from outside at all.
+		expect((await viaHandle('/api/auth/get-session', cookie)).status).toBe(404);
 	});
 
 	it('refuses the Member’s Recipe writes and hides their Recipes through the real API (FR-075)', async () => {
@@ -169,5 +168,25 @@ describe('Username gate', () => {
 				status: 303,
 				location: '/welcome'
 			});
+	});
+});
+
+describe('/api/auth/* from outside', () => {
+	// Better Auth rate-limits (and so writes to the database) before it looks up the route, so a
+	// path that leads nowhere must be refused before it gets there.
+	it('answers 404 for paths nobody uses, without touching the database', async () => {
+		const before = (await db.select().from(rateLimit)).length;
+		for (const path of ['/api/auth/a1', '/api/auth/a2', '/api/auth/ok', '/api/auth/sign-in/social'])
+			expect((await viaHandle(path)).status, path).toBe(404);
+		expect(
+			(await viaHandle('/api/auth/callback/google', undefined, { method: 'POST' })).status
+		).toBe(404);
+		expect((await viaHandle('/api/auth/callback/github')).status).toBe(404);
+		expect(await db.select().from(rateLimit)).toHaveLength(before);
+	});
+
+	it('still serves the provider callbacks', async () => {
+		for (const provider of ['google', 'line'])
+			expect((await viaHandle(`/api/auth/callback/${provider}?state=x`)).status).not.toBe(404);
 	});
 });

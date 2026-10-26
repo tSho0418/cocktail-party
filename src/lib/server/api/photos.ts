@@ -2,6 +2,7 @@ import { Hono, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import * as privateEnv from '$app/env/private';
 import { db } from '#lib/server/db/index.js';
+import { pruneQuotaUse, reserveQuota } from '#lib/server/services/quota/index.js';
 import { recordPhotoUpload } from '#lib/server/services/recipes/index.js';
 import type { ApiEnv } from './http';
 import {
@@ -26,21 +27,48 @@ const OWNER_KINDS: OwnerKind[] = ['recipe', 'member'];
 type RecordUpload = (memberId: string, kind: OwnerKind, id: string) => Promise<void>;
 const recordInDb: RecordUpload = (memberId, kind, id) => recordPhotoUpload(db, memberId, kind, id);
 
+/** Takes one of the Member's daily uploads; false when they are at the limit (services/quota). */
+type Reserve = (memberId: string) => Promise<boolean>;
+const reserveInDb: Reserve = async (memberId) => {
+	if (!(await reserveQuota(db, memberId, 'photo'))) return false;
+	// Housekeeping only: a failure must not undo an upload that is about to be accepted.
+	await pruneQuotaUse(db, memberId).catch((e) =>
+		console.error('quota_use prune failed', e instanceof Error ? e.name : typeof e)
+	);
+	return true;
+};
+
 /**
  * POST /photos?kind=recipe|member with the raw image as application/octet-stream
  * (multipart overhead would push a 4.5MB photo over the platform body limit).
  * The Content-Type must be exactly `application/octet-stream` (no parameters); our own client sets it.
  * `authorize` must let only a signed-in Member through: the upload is recorded against that
  * Member (`record`), and a Recipe can only use photos its own Member uploaded.
+ * Each request takes one of the Member's daily uploads (`reserve`, services/quota) before the body
+ * is read: over the limit it is 429 `photo_daily_limit` and costs no decoding and no R2 write. The
+ * use stays taken when the upload then fails (413, 415, 422...): a refused photo already cost
+ * CPU, so picking again counts.
  */
 export const photosRoute = ({
 	authorize = denyAll,
 	store = defaultStore,
-	record = recordInDb
-}: { authorize?: MiddlewareHandler; store?: () => ImageStore; record?: RecordUpload } = {}) =>
+	record = recordInDb,
+	reserve = reserveInDb
+}: {
+	authorize?: MiddlewareHandler;
+	store?: () => ImageStore;
+	record?: RecordUpload;
+	reserve?: Reserve;
+} = {}) =>
 	new Hono<ApiEnv>().post(
 		'/',
 		authorize,
+		// Before bodyLimit, which would read a length-less body to count it.
+		async (c, next) => {
+			if (!(await reserve(c.env.locals.member!.id)))
+				return c.json({ error: 'photo_daily_limit' }, 429);
+			await next();
+		},
 		// Rejects on Content-Length before reading, and counts streamed bytes when it is absent.
 		bodyLimit({ maxSize: MAX_BYTES, onError: (c) => c.json({ error: 'too_large' }, 413) }),
 		async (c) => {

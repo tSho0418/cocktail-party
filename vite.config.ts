@@ -4,6 +4,7 @@ import adapter from '@sveltejs/adapter-vercel';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { loadEnv } from 'vite';
 import { randomBytes } from 'node:crypto';
+import { CSP_DIRECTIVES } from './src/lib/server/security-headers.ts';
 
 // `pnpm test:db`: every run gets its own database on the DATABASE_URL_TEST server, so concurrent
 // runs (other worktrees) never collide; the db project's global setup creates, migrates and drops it.
@@ -59,7 +60,11 @@ export default defineConfig({
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
 			// Run next to the Neon database (Singapore); without it functions start in iad1 (US East).
-			adapter: adapter({ regions: ['sin1'] })
+			adapter: adapter({ regions: ['sin1'] }),
+			// Page CSP (#66): src/lib/server/security-headers.ts. Kit adds nonces to its own inline <script>/<style>;
+			// `mode: 'auto'` means nonces because no page is prerendered. The R2 origin for `img-src` is only
+			// known at run time and is added in hooks.server.ts.
+			csp: { mode: 'auto', directives: CSP_DIRECTIVES }
 		})
 	],
 	test: {

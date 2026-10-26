@@ -1,9 +1,11 @@
 import { sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
+	bigint,
 	boolean,
 	check,
 	index,
+	integer,
 	numeric,
 	pgEnum,
 	pgTable,
@@ -115,6 +117,15 @@ export const verification = pgTable(
 	(t) => [index('verification_identifier_idx').on(t.identifier)]
 );
 
+// Better Auth's rate limiter (`rateLimit.storage: 'database'`), one row per `<ip>|<path>`;
+// expired rows are pruned by the limiter itself.
+export const rateLimit = pgTable('rate_limit', {
+	id: uuid('id').primaryKey().defaultRandom(),
+	key: text('key').notNull().unique(),
+	count: integer('count').notNull(),
+	lastRequest: bigint('last_request', { mode: 'number' }).notNull()
+});
+
 export const ingredient = pgTable(
 	'ingredient',
 	{
@@ -218,6 +229,25 @@ export const photoUpload = pgTable(
 	(t) => [
 		check('photo_upload_kind', sql`${t.kind} IN ('recipe', 'member')`),
 		index('photo_upload_member_id_idx').on(t.memberId)
+	]
+);
+
+// One row per photo upload or Recipe publish, kept ~24 hours: the Member's daily limits count these
+// (services/quota). Not `photo_upload` or `recipe`: a Member could delete what they made and
+// refund the count, so the limit would never bind. Rows go with the Member.
+export const quotaUse = pgTable(
+	'quota_use',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		memberId: uuid('member_id')
+			.notNull()
+			.references(() => member.id, { onDelete: 'cascade' }),
+		kind: text('kind').notNull(),
+		createdAt: createdAt()
+	},
+	(t) => [
+		check('quota_use_kind', sql`${t.kind} IN ('photo', 'recipe')`),
+		index('quota_use_member_kind_created_idx').on(t.memberId, t.kind, t.createdAt)
 	]
 );
 
