@@ -76,11 +76,14 @@ describe('login actions', () => {
 		expect(await db.select().from(verification)).toHaveLength(0);
 	});
 
-	// The LINE channel has no approval to read the email, and the app stores none (FR-050): asking
-	// for it would only risk LINE refusing the login.
-	it('asks LINE for openid and profile only, not email', async () => {
+	// The LINE channel has no approval to read the email, and the app stores no email, name or
+	// photo (FR-050): asking for more than `openid` only risks LINE refusing the login.
+	it('asks LINE for openid only, keeping state and PKCE', async () => {
 		const { redirect } = redirectOf(await startLogin('line', fromIp('203.0.113.17')));
-		expect(new URL(redirect).searchParams.get('scope')?.split(' ')).toEqual(['openid', 'profile']);
+		const params = new URL(redirect).searchParams;
+		expect(params.get('scope')).toBe('openid');
+		expect(params.get('code_challenge_method')).toBe('S256');
+		expect(params.get('state')).toBeTruthy();
 	});
 
 	// The state now travels in a cookie, so the round trip must still work for each provider.
