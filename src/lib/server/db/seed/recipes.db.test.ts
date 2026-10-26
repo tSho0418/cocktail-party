@@ -39,7 +39,7 @@ describe('demo Recipe seed (DT-002)', () => {
 		expect(bases.length).toBeGreaterThanOrEqual(6);
 		// Each Recipe has its Main Photo stored (two derivatives per Recipe).
 		expect(store.objects.size).toBe(rows.length * 2);
-	});
+	}, 60_000); // sharp renders about 20 images: ~6 s alone, over the 5 s default under load
 
 	it('refuses to post as a real Member that already has the demo Username', async () => {
 		await db.execute(sql`truncate member cascade`);
