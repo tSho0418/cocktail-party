@@ -176,6 +176,27 @@ describe('withdrawMember and stored photos (FR-058)', () => {
 
 		expect([...store.objects.keys()].sort()).toEqual([kept, kept.replace('list', 'detail')].sort());
 	});
+
+	it('returns both files of a photo with no upload row, whichever file the key names (#48)', async () => {
+		// Keys written before photo_upload existed: no row, so the key is the only record of the pair.
+		const leaver = await newMember();
+		const [main, extra, icon] = [
+			`recipe/${randomUUID()}/list.webp`,
+			`recipe/${randomUUID()}/detail.webp`,
+			`member/${randomUUID()}/list.webp`
+		];
+		const own = await newRecipe(leaver.id, main);
+		await db.insert(recipePhoto).values({ recipeId: own.id, photoKey: extra, position: 1 });
+		await db.update(member).set({ iconKey: icon }).where(eq(member.id, leaver.id));
+
+		const keys = await withdrawMember({ id: leaver.id });
+
+		const pair = (key: string) => [
+			key.replace(/(list|detail)\.webp$/, 'list.webp'),
+			key.replace(/(list|detail)\.webp$/, 'detail.webp')
+		];
+		expect(keys.sort()).toEqual([main, extra, icon].flatMap(pair).sort());
+	});
 });
 
 describe('withdrawMember racing the same Member’s Recipe writes (#40)', () => {

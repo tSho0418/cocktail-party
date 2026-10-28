@@ -45,6 +45,12 @@
 			Member は、いつでも退会できます。退会すると、その Member の Recipe、Photo、Like、Save、Follow
 			をすべて削除します。猶予期間はなく、削除したものは元に戻せません。
 		</li>
+		<li>
+			LINE でログインした Member が退会すると、LY
+			Corporation(LINE)に退会したことが通知され、本サービスと LINE
+			アプリの連携が解除されます。解除できない場合があります。その場合も退会は完了し、連携は、LINE
+			アプリの「設定 &gt; アカウント &gt; 連携アプリ」から解除できます。
+		</li>
 	</ul>
 
 	<h2 class="mt-8 text-lg font-bold">4. 投稿の権利と写真の扱い</h2>
